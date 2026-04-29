@@ -21,20 +21,15 @@ if (Test-Path $credPath) {
 
 $form = New-Object System.Windows.Forms.Form
 $form.Text = "Local Network Agent v2.2.0"
-$form.Size = New-Object System.Drawing.Size(1100, 650)
+$form.Size = New-Object System.Drawing.Size(1120, 680)
 $form.StartPosition = "CenterScreen"
-$form.FormBorderStyle = "FixedDialog"
+$form.FormBorderStyle = "Fixed3D"
 $form.MaximizeBox = $false
 $form.MinimizeBox = $true
-$form.ControlBox = $true
-
-$form.Add_FormClosing({
-    $this.Owner = $null
-})
 
 $global:titlePanel = New-Object System.Windows.Forms.Panel
 $global:titlePanel.Location = New-Object System.Drawing.Point(0, 0)
-$global:titlePanel.Size = New-Object System.Drawing.Size(1100, 60)
+$global:titlePanel.Size = New-Object System.Drawing.Size(1120, 65)
 $global:titlePanel.BackColor = [System.Drawing.Color]::FromArgb(45, 45, 60)
 $global:titlePanel.BorderStyle = "FixedSingle"
 
@@ -247,11 +242,19 @@ $form.Controls.Add($global:rightPanel)
 function Start-NetworkScan {
     if ($global:scanning) { return }
     $global:scanning = $true
-    $lblStatus.Text = "Escaneando red..."
+    
+    $lblStatus.Text = "Escaneando..."
     $global:deviceList.Items.Clear()
     $btnScan.Enabled = $false
     
+    if (-not $global:config) {
+        $lblStatus.Text = "Error: no hay config"
+        $btnScan.Enabled = $true
+        return
+    }
+    
     $subnet = $global:config.SubnetPrefix
+    Write-Host "Escaneando subnet: $subnet.1-254"
     
     $script:scanJob = {
         param($sn)
