@@ -21,212 +21,227 @@ if (Test-Path $credPath) {
 
 $form = New-Object System.Windows.Forms.Form
 $form.Text = "Local Network Agent v2.2.0"
-$form.Size = New-Object System.Drawing.Size(1200, 750)
+$form.Size = New-Object System.Drawing.Size(1100, 650)
 $form.StartPosition = "CenterScreen"
-$form.BackColor = [System.Drawing.Color]::FromArgb(30, 30, 46)
-$form.ForeColor = [System.Drawing.Color]::White
+$form.FormBorderStyle = "FixedSingle"
+$form.MaximizeBox = $false
 
-$titlePanel = New-Object System.Windows.Forms.Panel
-$titlePanel.Dock = "Top"
-$titlePanel.Height = 60
-$titlePanel.BackColor = [System.Drawing.Color]::FromArgb(45, 45, 60)
+$global:titlePanel = New-Object System.Windows.Forms.Panel
+$global:titlePanel.Location = New-Object System.Drawing.Point(0, 0)
+$global:titlePanel.Size = New-Object System.Drawing.Size(1100, 60)
+$global:titlePanel.BackColor = [System.Drawing.Color]::FromArgb(45, 45, 60)
 
 $lblTitle = New-Object System.Windows.Forms.Label
 $lblTitle.Text = "LOCAL NETWORK AGENT"
-$lblTitle.Font = New-Object System.Drawing.Font("Segoe UI", 18, [System.Drawing.FontStyle]::Bold)
+$lblTitle.Font = New-Object System.Drawing.Font("Segoe UI", 16, [System.Drawing.FontStyle]::Bold)
 $lblTitle.ForeColor = [System.Drawing.Color]::FromArgb(0, 217, 255)
 $lblTitle.Location = New-Object System.Drawing.Point(20, 15)
-$titlePanel.Controls.Add($lblTitle)
+$lblTitle.AutoSize = $true
+$global:titlePanel.Controls.Add($lblTitle)
 
 $btnScan = New-Object System.Windows.Forms.Button
 $btnScan.Text = "ESCANEAR RED"
-$btnScan.Location = New-Object System.Drawing.Point(950, 15)
+$btnScan.Location = New-Object System.Drawing.Point(850, 15)
 $btnScan.Size = New-Object System.Drawing.Size(120, 35)
 $btnScan.FlatStyle = "Flat"
+$btnScan.FlatAppearance.BorderSize = 0
 $btnScan.BackColor = [System.Drawing.Color]::FromArgb(0, 200, 83)
 $btnScan.ForeColor = [System.Drawing.Color]::White
 $btnScan.Add_Click({ Start-NetworkScan })
-$titlePanel.Controls.Add($btnScan)
+$global:titlePanel.Controls.Add($btnScan)
 
-$form.Controls.Add($titlePanel)
+$form.Controls.Add($global:titlePanel)
 
-$leftPanel = New-Object System.Windows.Forms.Panel
-$leftPanel.Dock = "Left"
-$leftPanel.Width = 350
-$leftPanel.BackColor = [System.Drawing.Color]::FromArgb(35, 35, 50)
+$global:leftPanel = New-Object System.Windows.Forms.Panel
+$global:leftPanel.Location = New-Object System.Drawing.Point(10, 70)
+$global:leftPanel.Size = New-Object System.Drawing.Size(300, 570)
+$global:leftPanel.BackColor = [System.Drawing.Color]::FromArgb(35, 35, 50)
+$global:leftPanel.BorderStyle = "FixedSingle"
 
 $lblDevices = New-Object System.Windows.Forms.Label
 $lblDevices.Text = "DISPOSITIVOS EN RED"
-$lblDevices.Font = New-Object System.Drawing.Font("Segoe UI", 12, [System.Drawing.FontStyle]::Bold)
+$lblDevices.Font = New-Object System.Drawing.Font("Segoe UI", 11, [System.Drawing.FontStyle]::Bold)
 $lblDevices.ForeColor = [System.Drawing.Color]::Cyan
-$lblDevices.Location = New-Object System.Drawing.Point(15, 15)
-$leftPanel.Controls.Add($lblDevices)
+$lblDevices.Location = New-Object System.Drawing.Point(10, 10)
+$lblDevices.AutoSize = $true
+$global:leftPanel.Controls.Add($lblDevices)
 
 $lblStatus = New-Object System.Windows.Forms.Label
-$lblStatus.Text = "Clique en 'Escanear' para buscar dispositivos"
-$lblStatus.Font = New-Object System.Drawing.Font("Segoe UI", 9)
+$lblStatus.Text = "Clique en Escanear para buscar"
+$lblStatus.Font = New-Object System.Drawing.Font("Segoe UI", 8)
 $lblStatus.ForeColor = [System.Drawing.Color]::Silver
-$lblStatus.Location = New-Object System.Drawing.Point(15, 40)
-$lblStatus.Width = 320
-$leftPanel.Controls.Add($lblStatus)
+$lblStatus.Location = New-Object System.Drawing.Point(10, 35)
+$lblStatus.AutoSize = $true
+$global:leftPanel.Controls.Add($lblStatus)
 
-$deviceList = New-Object System.Windows.Forms.ListView
-$deviceList.Location = New-Object System.Drawing.Point(10, 70)
-$deviceList.Size = New-Object System.Drawing.Size(330, 450)
-$deviceList.BackColor = [System.Drawing.Color]::FromArgb(25, 25, 40)
-$deviceList.ForeColor = [System.Drawing.Color]::White
-$deviceList.FullRowSelect = $true
-$deviceList.View = "Details"
-$deviceList.Columns.Add("Nombre", 150)
-$deviceList.Columns.Add("IP", 100)
-$deviceList.Columns.Add("Estado", 60)
-$deviceList.Add_DoubleClick({ Show-DeviceInfo })
-$leftPanel.Controls.Add($deviceList)
+$global:deviceList = New-Object System.Windows.Forms.ListView
+$global:deviceList.Location = New-Object System.Drawing.Point(10, 60)
+$global:deviceList.Size = New-Object System.Drawing.Size(280, 500)
+$global:deviceList.BackColor = [System.Drawing.Color]::FromArgb(25, 25, 40)
+$global:deviceList.ForeColor = [System.Drawing.Color]::White
+$global:deviceList.FullRowSelect = $true
+$global:deviceList.View = "Details"
+$global:deviceList.Columns.Add("Nombre", 130)
+$global:deviceList.Columns.Add("IP", 80)
+$global:deviceList.Columns.Add("Estado", 50)
+$global:deviceList.Add_DoubleClick({ Show-DeviceInfo })
+$global:leftPanel.Controls.Add($global:deviceList)
 
-$form.Controls.Add($leftPanel)
+$form.Controls.Add($global:leftPanel)
 
-$rightPanel = New-Object System.Windows.Forms.Panel
-$rightPanel.Dock = "Fill"
-$rightPanel.BackColor = [System.Drawing.Color]::FromArgb(30, 30, 46)
+$global:rightPanel = New-Object System.Windows.Forms.Panel
+$global:rightPanel.Location = New-Object System.Drawing.Point(320, 70)
+$global:rightPanel.Size = New-Object System.Drawing.Size(770, 570)
+$global:rightPanel.BackColor = [System.Drawing.Color]::FromArgb(30, 30, 46)
 
-$infoPanel = New-Object System.Windows.Forms.Panel
-$infoPanel.Location = New-Object System.Drawing.Point(10, 10)
-$infoPanel.Size = New-Object System.Drawing.Size(780, 200)
-$infoPanel.BackColor = [System.Drawing.Color]::FromArgb(40, 40, 55)
-$infoPanel.BorderStyle = "FixedSingle"
+$global:infoPanel = New-Object System.Windows.Forms.Panel
+$global:infoPanel.Location = New-Object System.Drawing.Point(0, 0)
+$global:infoPanel.Size = New-Object System.Drawing.Size(770, 180)
+$global:infoPanel.BackColor = [System.Drawing.Color]::FromArgb(40, 40, 55)
+$global:infoPanel.BorderStyle = "FixedSingle"
 
 $lblInfoTitle = New-Object System.Windows.Forms.Label
 $lblInfoTitle.Text = "INFORMACION DEL DISPOSITIVO"
-$lblInfoTitle.Font = New-Object System.Drawing.Font("Segoe UI", 12, [System.Drawing.FontStyle]::Bold)
+$lblInfoTitle.Font = New-Object System.Drawing.Font("Segoe UI", 11, [System.Drawing.FontStyle]::Bold)
 $lblInfoTitle.ForeColor = [System.Drawing.Color]::FromArgb(0, 217, 255)
 $lblInfoTitle.Location = New-Object System.Drawing.Point(10, 10)
-$infoPanel.Controls.Add($lblInfoTitle)
+$lblInfoTitle.AutoSize = $true
+$global:infoPanel.Controls.Add($lblInfoTitle)
 
-$lblInfo = New-Object System.Windows.Forms.Label
-$lblInfo.Text = "Seleccione un dispositivo de la lista"
-$lblInfo.Font = New-Object System.Drawing.Font("Consolas", 10)
-$lblInfo.ForeColor = [System.Drawing.Color]::Silver
-$lblInfo.Location = New-Object System.Drawing.Point(10, 45)
-$lblInfo.Size = New-Object System.Drawing.Size(750, 140)
-$infoPanel.Controls.Add($lblInfo)
+$global:lblInfo = New-Object System.Windows.Forms.Label
+$global:lblInfo.Text = "Seleccione un dispositivo de la lista"
+$global:lblInfo.Font = New-Object System.Drawing.Font("Consolas", 9)
+$global:lblInfo.ForeColor = [System.Drawing.Color]::Silver
+$global:lblInfo.Location = New-Object System.Drawing.Point(10, 40)
+$global:lblInfo.Size = New-Object System.Drawing.Size(750, 130)
+$global:infoPanel.Controls.Add($global:lblInfo)
 
-$rightPanel.Controls.Add($infoPanel)
+$global:rightPanel.Controls.Add($global:infoPanel)
 
-$actionPanel = New-Object System.Windows.Forms.Panel
-$actionPanel.Location = New-Object System.Drawing.Point(10, 220)
-$actionPanel.Size = New-Object System.Drawing.Size(780, 80)
-$actionPanel.BackColor = [System.Drawing.Color]::FromArgb(40, 40, 55)
-$actionPanel.BorderStyle = "FixedSingle"
+$global:actionPanel = New-Object System.Windows.Forms.Panel
+$global:actionPanel.Location = New-Object System.Drawing.Point(0, 190)
+$global:actionPanel.Size = New-Object System.Drawing.Size(770, 70)
+$global:actionPanel.BackColor = [System.Drawing.Color]::FromArgb(40, 40, 55)
+$global:actionPanel.BorderStyle = "FixedSingle"
 
 $lblActions = New-Object System.Windows.Forms.Label
 $lblActions.Text = "ACCIONES"
-$lblActions.Font = New-Object System.Drawing.Font("Segoe UI", 11, [System.Drawing.FontStyle]::Bold)
+$lblActions.Font = New-Object System.Drawing.Font("Segoe UI", 10, [System.Drawing.FontStyle]::Bold)
 $lblActions.ForeColor = [System.Drawing.Color]::Cyan
 $lblActions.Location = New-Object System.Drawing.Point(10, 8)
-$actionPanel.Controls.Add($lblActions)
+$lblActions.AutoSize = $true
+$global:actionPanel.Controls.Add($lblActions)
 
 $btnFiles = New-Object System.Windows.Forms.Button
 $btnFiles.Text = "ARCHIVOS"
-$btnFiles.Location = New-Object System.Drawing.Point(10, 35)
-$btnFiles.Size = New-Object System.Drawing.Size(100, 35)
+$btnFiles.Location = New-Object System.Drawing.Point(10, 32)
+$btnFiles.Size = New-Object System.Drawing.Size(90, 30)
 $btnFiles.FlatStyle = "Flat"
+$btnFiles.FlatAppearance.BorderSize = 0
 $btnFiles.BackColor = [System.Drawing.Color]::FromArgb(255, 184, 108)
 $btnFiles.ForeColor = [System.Drawing.Color]::Black
 $btnFiles.Add_Click({ Open-Files })
-$actionPanel.Controls.Add($btnFiles)
+$global:actionPanel.Controls.Add($btnFiles)
 
 $btnShell = New-Object System.Windows.Forms.Button
 $btnShell.Text = "SHELL"
-$btnShell.Location = New-Object System.Drawing.Point(120, 35)
-$btnShell.Size = New-Object System.Drawing.Size(100, 35)
+$btnShell.Location = New-Object System.Drawing.Point(110, 32)
+$btnShell.Size = New-Object System.Drawing.Size(90, 30)
 $btnShell.FlatStyle = "Flat"
+$btnShell.FlatAppearance.BorderSize = 0
 $btnShell.BackColor = [System.Drawing.Color]::FromArgb(255, 121, 198)
 $btnShell.ForeColor = [System.Drawing.Color]::Black
 $btnShell.Add_Click({ Open-Shell })
-$actionPanel.Controls.Add($btnShell)
+$global:actionPanel.Controls.Add($btnShell)
 
 $btnWoL = New-Object System.Windows.Forms.Button
 $btnWoL.Text = "WOL"
-$btnWoL.Location = New-Object System.Drawing.Point(230, 35)
-$btnWoL.Size = New-Object System.Drawing.Size(100, 35)
+$btnWoL.Location = New-Object System.Drawing.Point(210, 32)
+$btnWoL.Size = New-Object System.Drawing.Size(90, 30)
 $btnWoL.FlatStyle = "Flat"
+$btnWoL.FlatAppearance.BorderSize = 0
 $btnWoL.BackColor = [System.Drawing.Color]::FromArgb(0, 200, 83)
 $btnWoL.ForeColor = [System.Drawing.Color]::White
 $btnWoL.Add_Click({ Send-WoL })
-$actionPanel.Controls.Add($btnWoL)
+$global:actionPanel.Controls.Add($btnWoL)
 
 $btnSpeak = New-Object System.Windows.Forms.Button
 $btnSpeak.Text = "VOZ"
-$btnSpeak.Location = New-Object System.Drawing.Point(340, 35)
-$btnSpeak.Size = New-Object System.Drawing.Size(100, 35)
+$btnSpeak.Location = New-Object System.Drawing.Point(310, 32)
+$btnSpeak.Size = New-Object System.Drawing.Size(90, 30)
 $btnSpeak.FlatStyle = "Flat"
+$btnSpeak.FlatAppearance.BorderSize = 0
 $btnSpeak.BackColor = [System.Drawing.Color]::FromArgb(255, 87, 34)
 $btnSpeak.ForeColor = [System.Drawing.Color]::White
 $btnSpeak.Add_Click({ Open-Voice })
-$actionPanel.Controls.Add($btnSpeak)
+$global:actionPanel.Controls.Add($btnSpeak)
 
 $btnIntercom = New-Object System.Windows.Forms.Button
 $btnIntercom.Text = "CHAT"
-$btnIntercom.Location = New-Object System.Drawing.Point(450, 35)
-$btnIntercom.Size = New-Object System.Drawing.Size(100, 35)
+$btnIntercom.Location = New-Object System.Drawing.Point(410, 32)
+$btnIntercom.Size = New-Object System.Drawing.Size(90, 30)
 $btnIntercom.FlatStyle = "Flat"
+$btnIntercom.FlatAppearance.BorderSize = 0
 $btnIntercom.BackColor = [System.Drawing.Color]::FromArgb(74, 42, 193)
 $btnIntercom.ForeColor = [System.Drawing.Color]::White
 $btnIntercom.Add_Click({ Open-Intercom })
-$actionPanel.Controls.Add($btnIntercom)
+$global:actionPanel.Controls.Add($btnIntercom)
 
-$rightPanel.Controls.Add($actionPanel)
+$global:rightPanel.Controls.Add($global:actionPanel)
 
-$apiPanel = New-Object System.Windows.Forms.Panel
-$apiPanel.Location = New-Object System.Drawing.Point(10, 310)
-$apiPanel.Size = New-Object System.Drawing.Size(780, 150)
-$apiPanel.BackColor = [System.Drawing.Color]::FromArgb(40, 40, 55)
-$apiPanel.BorderStyle = "FixedSingle"
+$global:apiPanel = New-Object System.Windows.Forms.Panel
+$global:apiPanel.Location = New-Object System.Drawing.Point(0, 270)
+$global:apiPanel.Size = New-Object System.Drawing.Size(770, 290)
+$global:apiPanel.BackColor = [System.Drawing.Color]::FromArgb(40, 40, 55)
+$global:apiPanel.BorderStyle = "FixedSingle"
 
 $lblApi = New-Object System.Windows.Forms.Label
 $lblApi.Text = "API SERVER"
-$lblApi.Font = New-Object System.Drawing.Font("Segoe UI", 11, [System.Drawing.FontStyle]::Bold)
+$lblApi.Font = New-Object System.Drawing.Font("Segoe UI", 10, [System.Drawing.FontStyle]::Bold)
 $lblApi.ForeColor = [System.Drawing.Color]::Cyan
 $lblApi.Location = New-Object System.Drawing.Point(10, 8)
-$apiPanel.Controls.Add($lblApi)
+$lblApi.AutoSize = $true
+$global:apiPanel.Controls.Add($lblApi)
 
 $btnApi = New-Object System.Windows.Forms.Button
 $btnApi.Text = "INICIAR API"
-$btnApi.Location = New-Object System.Drawing.Point(10, 35)
-$btnApi.Size = New-Object System.Drawing.Size(120, 35)
+$btnApi.Location = New-Object System.Drawing.Point(10, 32)
+$btnApi.Size = New-Object System.Drawing.Size(100, 30)
 $btnApi.FlatStyle = "Flat"
+$btnApi.FlatAppearance.BorderSize = 0
 $btnApi.BackColor = [System.Drawing.Color]::FromArgb(15, 52, 96)
 $btnApi.ForeColor = [System.Drawing.Color]::White
 $btnApi.Add_Click({ Toggle-Api })
-$apiPanel.Controls.Add($btnApi)
+$global:apiPanel.Controls.Add($btnApi)
 
-$lblApiStatus = New-Object System.Windows.Forms.Label
-$lblApiStatus.Text = "API: Detenida"
-$lblApiStatus.Font = New-Object System.Drawing.Font("Consolas", 9)
-$lblApiStatus.ForeColor = [System.Drawing.Color]::Silver
-$lblApiStatus.Location = New-Object System.Drawing.Point(140, 40)
-$apiPanel.Controls.Add($lblApiStatus)
+$global:lblApiStatus = New-Object System.Windows.Forms.Label
+$global:lblApiStatus.Text = "API: Detenida"
+$global:lblApiStatus.Font = New-Object System.Drawing.Font("Consolas", 8)
+$global:lblApiStatus.ForeColor = [System.Drawing.Color]::Silver
+$global:lblApiStatus.Location = New-Object System.Drawing.Point(120, 38)
+$global:lblApiStatus.AutoSize = $true
+$global:apiPanel.Controls.Add($global:lblApiStatus)
 
-$txtLog = New-Object System.Windows.Forms.TextBox
-$txtLog.Location = New-Object System.Drawing.Point(10, 75)
-$txtLog.Size = New-Object System.Drawing.Size(760, 70)
-$txtLog.Multiline = $true
-$txtLog.BackColor = [System.Drawing.Color]::FromArgb(20, 20, 30)
-$txtLog.ForeColor = [System.Drawing.Color]::Lime
-$txtLog.Font = New-Object System.Drawing.Font("Consolas", 8)
-$txtLog.ReadOnly = $true
-$txtLog.ScrollBars = "Vertical"
-$apiPanel.Controls.Add($txtLog)
+$global:txtLog = New-Object System.Windows.Forms.TextBox
+$global:txtLog.Location = New-Object System.Drawing.Point(10, 70)
+$global:txtLog.Size = New-Object System.Drawing.Size(750, 210)
+$global:txtLog.Multiline = $true
+$global:txtLog.BackColor = [System.Drawing.Color]::FromArgb(20, 20, 30)
+$global:txtLog.ForeColor = [System.Drawing.Color]::Lime
+$global:txtLog.Font = New-Object System.Drawing.Font("Consolas", 8)
+$global:txtLog.ReadOnly = $true
+$global:txtLog.ScrollBars = "Vertical"
+$global:apiPanel.Controls.Add($global:txtLog)
 
-$rightPanel.Controls.Add($apiPanel)
+$global:rightPanel.Controls.Add($global:apiPanel)
 
-$form.Controls.Add($rightPanel)
+$form.Controls.Add($global:rightPanel)
 
 function Start-NetworkScan {
     if ($global:scanning) { return }
     $global:scanning = $true
     $lblStatus.Text = "Escaneando red..."
-    $deviceList.Items.Clear()
+    $global:deviceList.Items.Clear()
     $btnScan.Enabled = $false
     
     $subnet = $global:config.SubnetPrefix
@@ -268,9 +283,9 @@ function Start-NetworkScan {
                 $item.Tag = $r
                 if ($r.Hostname -eq $r.IP) { $item.ForeColor = [System.Drawing.Color]::Yellow }
                 else { $item.ForeColor = [System.Drawing.Color]::Lime }
-                $deviceList.Items.Add($item)
+                $global:deviceList.Items.Add($item)
             }
-            $lblStatus.Text = "Encontrados: $($results.Count) dispositivos"
+            $lblStatus.Text = "Encontrados: $($results.Count)"
             $global:scanning = $false
             $btnScan.Enabled = $true
             $timer.Stop()
@@ -282,21 +297,21 @@ function Start-NetworkScan {
 }
 
 function Show-DeviceInfo {
-    if ($deviceList.SelectedItems.Count -eq 0) { return }
-    $item = $deviceList.SelectedItems[0]
+    if ($global:deviceList.SelectedItems.Count -eq 0) { return }
+    $item = $global:deviceList.SelectedItems[0]
     $global:selectedDevice = $item.Tag
     
     $info = "DISPOSITIVO: $($global:selectedDevice.Hostname)`n"
     $info += "IP: $($global:selectedDevice.IP)`n"
-    $info += "ESTADO: $($global:selectedDevice.Status)`n"
-    $info += "`n-- ACCIONES DISPONIBLES --`n"
-    $info += "- Archivos: Navegar sistema de archivos`n"
-    $info += "- Shell: Consola remota PowerShell`n"
-    $info += "- WoL: Encender equipo remotamente`n"
-    $info += "- Voz: Enviar mensaje de voz`n"
-    $info += "- Chat: Chat de texto en tiempo real"
+    $info += "ESTADO: $($global:selectedDevice.Status)`n`n"
+    $info += "--- ACCIONES ---`n"
+    $info += "Archivos: Navegar archivos`n"
+    $info += "Shell: Consola remota`n"
+    $info += "WoL: Encender equipo`n"
+    $info += "Voz: Mensaje de voz`n"
+    $info += "Chat: Chat en tiempo real"
     
-    $lblInfo.Text = $info
+    $global:lblInfo.Text = $info
 }
 
 function Open-Files {
@@ -321,7 +336,7 @@ function Send-WoL {
         return
     }
     Start-Process powershell.exe -ArgumentList "-WindowStyle Hidden -ExecutionPolicy Bypass -Command `"Import-Module '$projectPath\NetworkUtilsPublic.psm1'; Send-WakeOnLan -MACAddress (Get-Content '$projectPath\network-config.json' | ConvertFrom-Json).Core0MAC`"" -WindowStyle Hidden
-    [System.Windows.Forms.MessageBox]::Show("Paquete WoL enviado a $($global:selectedDevice.Hostname)", "WoL")
+    [System.Windows.Forms.MessageBox]::Show("Paquete WoL enviado", "WoL")
 }
 
 function Open-Voice {
@@ -347,7 +362,7 @@ function Toggle-Api {
         $global:apiProcess = Start-Process powershell.exe -ArgumentList "-WindowStyle Hidden -ExecutionPolicy Bypass -File `"$projectPath\API-Server.ps1`"" -WindowStyle Hidden -PassThru -RedirectStandardOutput "$projectPath\temp_api.log"
         $btnApi.Text = "DETENER API"
         $btnApi.BackColor = [System.Drawing.Color]::FromArgb(233, 69, 96)
-        $lblApiStatus.Text = "API: Ejecutando en puerto 8082"
+        $global:lblApiStatus.Text = "API: Ejecutando"
         
         $timer = New-Object System.Windows.Forms.Timer
         $timer.Interval = 500
@@ -356,14 +371,14 @@ function Toggle-Api {
                 try {
                     $log = Get-Content "$projectPath\temp_api.log" -Tail 3 -ErrorAction SilentlyContinue
                     if ($log) {
-                        $txtLog.AppendText(($log -join "`n") + "`n")
+                        $global:txtLog.AppendText(($log -join "`n") + "`n")
                     }
                 } catch {}
             }
             if ($global:apiProcess.HasExited) {
                 $btnApi.Text = "INICIAR API"
                 $btnApi.BackColor = [System.Drawing.Color]::FromArgb(15, 52, 96)
-                $lblApiStatus.Text = "API: Detenida"
+                $global:lblApiStatus.Text = "API: Detenida"
                 $global:apiProcess = $null
                 $timer.Stop()
                 $timer.Dispose()
@@ -375,7 +390,7 @@ function Toggle-Api {
         $global:apiProcess = $null
         $btnApi.Text = "INICIAR API"
         $btnApi.BackColor = [System.Drawing.Color]::FromArgb(15, 52, 96)
-        $lblApiStatus.Text = "API: Detenida"
+        $global:lblApiStatus.Text = "API: Detenida"
     }
 }
 
@@ -387,5 +402,4 @@ if ($Minimized) {
     $form.WindowState = [System.Windows.Forms.FormWindowState]::Minimized
 }
 
-Write-Host "Iniciando GUI..." -ForegroundColor Cyan
 [System.Windows.Forms.Application]::Run($form)
