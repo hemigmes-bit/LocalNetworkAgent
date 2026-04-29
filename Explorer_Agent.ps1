@@ -145,6 +145,26 @@ $listView.Add_DoubleClick({
     }
 })
 
+# Also navigate on single click (when user selects an item, navigate after a short delay)
+$listView.Add_MouseClick({
+    Start-Sleep -Milliseconds 300
+    if ($listView.SelectedItems.Count -gt 0) {
+        $item = $listView.SelectedItems[0]
+        if ($item.Tag) {
+            $data = $item.Tag
+            if ($data.Type -eq "PC") {
+                $global:currentComputer = $data.IP
+                $global:currentPath = "__DRIVES__"
+                Show-Folder
+            }
+            elseif ($data.Type -eq "Drive" -or $data.Type -eq "Dir") {
+                $global:currentPath = $data.Path
+                Show-Folder
+            }
+        }
+    }
+})
+
 Add-Button "ATRAS" 10 @(128,128,128) {
     if ($global:currentPath -eq "__NETWORK__") { return }
     if ($global:currentPath -eq "__DRIVES__") { $global:currentPath = "__NETWORK__"; Show-Folder; return }
