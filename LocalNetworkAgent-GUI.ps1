@@ -70,7 +70,7 @@ function Get-SelectedComputer {
         $names += $pc.Name
         $ipMap[$pc.Name] = $pc.IP
     }
-    $selection = $names | ForEach-Object { $_ } | Out-GridView -Title "Seleccionar dispositivo" -PassThru
+    $selection = $names | Out-GridView -Title "Seleccionar dispositivo" -PassThru
     if ($selection -and $ipMap.ContainsKey($selection)) { return $ipMap[$selection] }
     return $null
 }
