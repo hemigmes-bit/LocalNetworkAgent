@@ -45,12 +45,25 @@ $side = New-Object Windows.Forms.Panel
 $side.Dock = "Right"; $side.Width = 200; $side.BackColor = [Drawing.Color]::FromArgb(45, 45, 48)
 
 function Add-Btn {
-    param($txt, $top, $color, $click)
+    param([string]$txt, [int]$top, [int]$colorArgb, [scriptblock]$click)
     $b = New-Object Windows.Forms.Button
     $b.Text = $txt; $b.Top = $top; $b.Left = 10; $b.Width = 180; $b.Height = 45; $b.FlatStyle = "Flat"
-    $b.BackColor = $color; $b.Add_Click($click)
+    $r = [math]::Floor($colorArgb / 10000)
+    $g = [math]::Floor(($colorArgb % 10000) / 100)
+    $bb = $colorArgb % 100
+    $b.BackColor = [Drawing.Color]::FromArgb($r, $g, $bb)
+    $b.Add_Click($click)
     $side.Controls.Add($b)
 }
+
+# COLORES (en formato FromArgb: R,G,B)
+$colorGray = 128,128,128
+$colorDarkBlue = 0,0,139
+$colorDarkGreen = 0,100,0
+$colorDarkRed = 139,0,0
+$colorDarkCyan = 0,139,139
+$colorBlue = 0,120,215
+$colorPurple = 128,0,128
 
 # --- LÓGICA DE NAVEGACIÓN ---
 function Refresh-Explorer {
@@ -119,7 +132,7 @@ $listView.Add_DoubleClick({
 })
 
 # --- BOTONES DE ACCIÓN ---
-Add-Btn "ATRÁS" 10 [Drawing.Color]::Gray {
+Add-Btn "ATRÁS" 10 128128128 {
     if ($global:currentPath -eq "__NETWORK__") { return }
     if ($global:currentPath -eq "__DRIVES__") { $global:currentPath = "__NETWORK__"; Refresh-Explorer; return }
     if ($global:currentPath -match '^[A-Za-z]:\\$') { $global:currentPath = "__DRIVES__"; Refresh-Explorer; return }
@@ -127,7 +140,7 @@ Add-Btn "ATRÁS" 10 [Drawing.Color]::Gray {
     Refresh-Explorer
 }
 
-Add-Btn "COPIAR" 70 [Drawing.Color]::DarkBlue {
+Add-Btn "COPIAR" 70 01390 {
     if ($listView.SelectedItems.Count -gt 0) {
         $data = $listView.SelectedItems[0].Tag
         if ($data.Type -eq "File") {
@@ -137,7 +150,7 @@ Add-Btn "COPIAR" 70 [Drawing.Color]::DarkBlue {
     }
 }
 
-Add-Btn "PEGAR AQUÍ" 125 [Drawing.Color]::DarkGreen {
+Add-Btn "PEGAR AQUÍ" 125 01000 {
     if ($null -eq $global:clipboardFile) { return }
     if ($global:currentPath -eq "__NETWORK__" -or $global:currentPath -eq "__DRIVES__") { return }
     
@@ -159,7 +172,7 @@ Add-Btn "PEGAR AQUÍ" 125 [Drawing.Color]::DarkGreen {
     } catch { [Windows.Forms.MessageBox]::Show("Error al pegar: $($_.Exception.Message)") }
 }
 
-Add-Btn "NUEVA CARPETA" 180 [Drawing.Color]::FromArgb(60, 60, 60) {
+Add-Btn "NUEVA CARPETA" 180 606060 {
     if ($global:currentPath -eq "__NETWORK__" -or $global:currentPath -eq "__DRIVES__") { return }
     $name = [Microsoft.VisualBasic.Interaction]::InputBox("Nombre de la nueva carpeta:", "Crear Carpeta", "Nueva Carpeta")
     if ($name) {
@@ -170,7 +183,7 @@ Add-Btn "NUEVA CARPETA" 180 [Drawing.Color]::FromArgb(60, 60, 60) {
     }
 }
 
-Add-Btn "RENOMBRAR" 235 [Drawing.Color]::FromArgb(60, 60, 60) {
+Add-Btn "RENOMBRAR" 235 606060 {
     if ($listView.SelectedItems.Count -gt 0) {
         $data = $listView.SelectedItems[0].Tag
         $newName = [Microsoft.VisualBasic.Interaction]::InputBox("Nuevo nombre:", "Renombrar", (Split-Path $data.Path -Leaf))
@@ -183,7 +196,7 @@ Add-Btn "RENOMBRAR" 235 [Drawing.Color]::FromArgb(60, 60, 60) {
     }
 }
 
-Add-Btn "VISTA PREVIA" 345 [Drawing.Color]::FromArgb(0, 120, 215) {
+Add-Btn "VISTA PREVIA" 345 0120215 {
     if ($listView.SelectedItems.Count -gt 0) {
         $data = $listView.SelectedItems[0].Tag
         if ($data.Type -eq "File") {
@@ -202,7 +215,7 @@ Add-Btn "VISTA PREVIA" 345 [Drawing.Color]::FromArgb(0, 120, 215) {
     }
 }
 
-Add-Btn "PROPIEDADES" 400 [Drawing.Color]::FromArgb(60, 60, 60) {
+Add-Btn "PROPIEDADES" 400 606060 {
     if ($listView.SelectedItems.Count -gt 0) {
         $data = $listView.SelectedItems[0].Tag
         $form.Cursor = [Windows.Forms.Cursors]::WaitCursor
@@ -220,7 +233,7 @@ Add-Btn "PROPIEDADES" 400 [Drawing.Color]::FromArgb(60, 60, 60) {
     }
 }
 
-Add-Btn "ELIMINAR" 455 [Drawing.Color]::DarkRed {
+Add-Btn "ELIMINAR" 455 13900 {
     if ($listView.SelectedItems.Count -gt 0) {
         $data = $listView.SelectedItems[0].Tag
         Invoke-Command -ComputerName $global:currentComputer -Credential $cred -ScriptBlock { param($p) Remove-Item $p -Recurse -Force } -ArgumentList $data.Path
@@ -228,7 +241,7 @@ Add-Btn "ELIMINAR" 455 [Drawing.Color]::DarkRed {
     }
 }
 
-Add-Btn "ACTUALIZAR" 600 [Drawing.Color]::Black { Refresh-Explorer }
+Add-Btn "ACTUALIZAR" 600 00 { Refresh-Explorer }
 
 $form.Controls.AddRange(@($listView, $header, $side))
 $form.Add_Shown({ Refresh-Explorer })
