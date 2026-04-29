@@ -4,6 +4,7 @@ using System.Windows.Forms;
 using System.Diagnostics;
 using System.IO;
 using System.Threading;
+using System.Collections.Generic;
 using Microsoft.VisualBasic;
 using System.Text.Json;
 
@@ -138,6 +139,9 @@ public class NetworkAgentLauncher : Form
         var btnOk = new Button { Text = "Conectar", Left = 180, Width = 90, Top = 90, BackColor = Color.FromArgb(0, 200, 83), ForeColor = Color.White, FlatStyle = FlatStyle.Flat };
         var btnCancel = new Button { Text = "Cancelar", Left = 85, Width = 90, Top = 90, BackColor = Color.FromArgb(233, 69, 96), ForeColor = Color.White, FlatStyle = FlatStyle.Flat };
         
+        // Dictionary to store name -> IP mapping
+        var nameToIp = new Dictionary<string, string>();
+        
         try {
             if (File.Exists(configPath)) {
                 var json = File.ReadAllText(configPath);
@@ -156,8 +160,9 @@ public class NetworkAgentLauncher : Form
                                         var ipEnd = c.IndexOf("\"", ipStart);
                                         if (ipEnd > ipStart) {
                                             var ip = c.Substring(ipStart, ipEnd - ipStart);
-                                            if (!combo.Items.Contains(name + " (" + ip + ")")) {
-                                                combo.Items.Add(name + " (" + ip + ")");
+                                            nameToIp[name] = ip;
+                                            if (!combo.Items.Contains(name)) {
+                                                combo.Items.Add(name);
                                             }
                                         }
                                     }
@@ -173,13 +178,12 @@ public class NetworkAgentLauncher : Form
         
         string? result = null;
         btnOk.Click += (s, e) => { 
-            var selected = combo.Text;
-            if (selected.Contains("(") && selected.Contains(")")) {
-                var start = selected.IndexOf("(") + 1;
-                var end = selected.IndexOf(")");
-                selected = selected.Substring(start, end - start);
+            var selectedName = combo.Text;
+            if (nameToIp.ContainsKey(selectedName)) {
+                result = nameToIp[selectedName];
+            } else {
+                result = selectedName;
             }
-            result = selected; 
             form.Close(); 
         };
         btnCancel.Click += (s, e) => { result = null; form.Close(); };
