@@ -94,10 +94,14 @@ function Show-Folder {
             }
         }
         else {
+            if ([string]::IsNullOrEmpty($global:currentPath)) {
+                [Windows.Forms.MessageBox]::Show("Error: Ruta vacia")
+                return
+            }
             $lblPath.Text = " Ubicacion: $global:currentComputer > $global:currentPath"
             $files = Invoke-Command -ComputerName $global:currentComputer -Credential $cred -ScriptBlock {
                 param($p)
-                Get-ChildItem -Path $p | Select-Object Name, PSIsContainer, Length, LastWriteTime
+                Get-ChildItem -Path $p -ErrorAction SilentlyContinue | Select-Object Name, PSIsContainer, Length, LastWriteTime
             } -ArgumentList $global:currentPath
             foreach ($f in $files) {
                 $item = New-Object Windows.Forms.ListViewItem($f.Name)
@@ -137,7 +141,7 @@ $listView.Add_DoubleClick({
                 $global:currentPath = "__DRIVES__"
                 Show-Folder
             }
-            elseif ($data.Type -eq "Drive" -or $data.Type -eq "Dir") {
+            elseif (($data.Type -eq "Drive" -or $data.Type -eq "Dir") -and $data.Path) {
                 $global:currentPath = $data.Path
                 Show-Folder
             }
@@ -145,7 +149,6 @@ $listView.Add_DoubleClick({
     }
 })
 
-# Also navigate on single click (when user selects an item, navigate after a short delay)
 $listView.Add_MouseClick({
     Start-Sleep -Milliseconds 300
     if ($listView.SelectedItems.Count -gt 0) {
@@ -157,7 +160,7 @@ $listView.Add_MouseClick({
                 $global:currentPath = "__DRIVES__"
                 Show-Folder
             }
-            elseif ($data.Type -eq "Drive" -or $data.Type -eq "Dir") {
+            elseif (($data.Type -eq "Drive" -or $data.Type -eq "Dir") -and $data.Path) {
                 $global:currentPath = $data.Path
                 Show-Folder
             }
