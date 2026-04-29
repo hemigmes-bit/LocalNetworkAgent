@@ -266,7 +266,9 @@ function Start-NetworkScan {
         }
         for ($i = 1; $i -le 20; $i++) {
             $ip = "$sn.$i"
-            if ($allIPs -not.Contains($ip)) { $allIPs += $ip }
+            $found = $false
+            foreach ($k in $allIPs) { if ($k -eq $ip) { $found = $true } }
+            if (-not $found) { $allIPs += $ip }
         }
         
         $ping = New-Object System.Net.NetworkInformation.Ping
