@@ -78,38 +78,38 @@ function Get-SelectedComputer {
 $btnFiles.Add_Click({
     $ip = Get-SelectedComputer
     if ($ip) {
-        Start-Process powershell -ArgumentList "-WindowStyle Hidden -File `"$projectPath\Explorer_Agent.ps1`" -ComputerName $ip" -WindowStyle Hidden
+        Start-Process powershell -ArgumentList "-NoExit -File `"$projectPath\Explorer_Agent.ps1`" -ComputerName $ip" -WindowStyle Hidden
     }
 })
 
 $btnShell.Add_Click({
     $ip = Get-SelectedComputer
     if ($ip) {
-        Start-Process powershell -ArgumentList "-WindowStyle Hidden -Command `"Import-Module '$projectPath\NetworkUtilsPublic.psm1'; Connect-RemoteComputer -ComputerName $ip`"" -WindowStyle Hidden
+        Start-Process powershell -ArgumentList "-NoExit -Command `"Import-Module '$projectPath\NetworkUtilsPublic.psm1'; Connect-RemoteComputer -ComputerName $ip`"" -WindowStyle Hidden
     }
 })
 
 $btnVoice.Add_Click({
-    Start-Process powershell -ArgumentList "-WindowStyle Hidden -File `"$projectPath\VoiceControl.ps1`"" -WindowStyle Hidden
+    Start-Process powershell -ArgumentList "-NoExit -File `"$projectPath\VoiceControl.ps1`"" -WindowStyle Hidden
 })
 
 $btnIntercom.Add_Click({
     $ip = Get-SelectedComputer
     if ($ip) {
-        Start-Process powershell -ArgumentList "-WindowStyle Hidden -File `"$projectPath\Intercom.ps1`" -ComputerName $ip" -WindowStyle Hidden
+        Start-Process powershell -ArgumentList "-NoExit -File `"$projectPath\Intercom.ps1`" -ComputerName $ip" -WindowStyle Hidden
     }
 })
 
 $btnSpeak.Add_Click({
     $ip = Get-SelectedComputer
     if ($ip) {
-        Start-Process powershell -ArgumentList "-WindowStyle Hidden -File `"$projectPath\Speak-Remote.ps1`" -ComputerName $ip" -WindowStyle Hidden
+        Start-Process powershell -ArgumentList "-NoExit -File `"$projectPath\Speak-Remote.ps1`" -ComputerName $ip" -WindowStyle Hidden
     }
 })
 
 $btnWoL.Add_Click({
     $config = Get-Content "$projectPath\network-config.json" | ConvertFrom-Json
-    Start-Process powershell -ArgumentList "-WindowStyle Hidden -Command `"Import-Module '$projectPath\NetworkUtilsPublic.psm1'; Send-WakeOnLan -MACAddress $($config.Core0MAC)`"" -WindowStyle Hidden
+    Start-Process powershell -ArgumentList "-Command `"Import-Module '$projectPath\NetworkUtilsPublic.psm1'; Send-WakeOnLan -MACAddress $($config.Core0MAC)`"" -WindowStyle Hidden
     [System.Windows.Forms.MessageBox]::Show("Paquete WoL enviado a CORE0!", "WoL")
 })
 
