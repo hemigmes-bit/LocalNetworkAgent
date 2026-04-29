@@ -1,2 +1,2 @@
 @echo off
-start "" /b powershell -WindowStyle Hidden -ExecutionPolicy Bypass -File "%~dp0LocalNetworkAgent-GUI.ps1"
+start "" /b powershell -WindowStyle Hidden -ExecutionPolicy Bypass -NoExit -File "%~dp0LocalNetworkAgent-GUI.ps1"

@@ -23,13 +23,20 @@ $form = New-Object System.Windows.Forms.Form
 $form.Text = "Local Network Agent v2.2.0"
 $form.Size = New-Object System.Drawing.Size(1100, 650)
 $form.StartPosition = "CenterScreen"
-$form.FormBorderStyle = "FixedSingle"
+$form.FormBorderStyle = "FixedDialog"
 $form.MaximizeBox = $false
+$form.MinimizeBox = $true
+$form.ControlBox = $true
+
+$form.Add_FormClosing({
+    $this.Owner = $null
+})
 
 $global:titlePanel = New-Object System.Windows.Forms.Panel
 $global:titlePanel.Location = New-Object System.Drawing.Point(0, 0)
 $global:titlePanel.Size = New-Object System.Drawing.Size(1100, 60)
 $global:titlePanel.BackColor = [System.Drawing.Color]::FromArgb(45, 45, 60)
+$global:titlePanel.BorderStyle = "FixedSingle"
 
 $lblTitle = New-Object System.Windows.Forms.Label
 $lblTitle.Text = "LOCAL NETWORK AGENT"
@@ -402,4 +409,10 @@ if ($Minimized) {
     $form.WindowState = [System.Windows.Forms.FormWindowState]::Minimized
 }
 
-[System.Windows.Forms.Application]::Run($form)
+try {
+    [System.Windows.Forms.Application]::Run($form)
+} catch {
+    Write-Host "Error: $_"
+} finally {
+    Start-Sleep -Seconds 1
+}
