@@ -1,3 +1,2 @@
 @echo off
-cd /d "C:\Users\Usuario\LocalNetworkAgent"
-powershell -ExecutionPolicy Bypass -File "LocalNetworkAgent-GUI.ps1"
+start "" /b powershell -WindowStyle Hidden -ExecutionPolicy Bypass -File "%~dp0LocalNetworkAgent-GUI.ps1"
