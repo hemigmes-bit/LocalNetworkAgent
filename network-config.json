@@ -9,6 +9,12 @@
                           "OpenPorts":  "80,443"
                       },
                       {
+                          "Name":  "CORE0",
+                          "IP":  "192.168.1.10",
+                          "OS":  null,
+                          "OpenPorts":  "5985"
+                      },
+                      {
                           "Name":  "VICTORYMAR.home",
                           "IP":  "192.168.1.16",
                           "OS":  "Microsoft Windows 11 Pro",
