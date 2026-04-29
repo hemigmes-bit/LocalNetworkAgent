@@ -74,7 +74,17 @@ public class NetworkAgentLauncher : Form
         };
         btnFiles.Click += (s, e) => {
             string ip = Interaction.InputBox("IP:", "Archivos", "192.168.1.14");
-            if (!string.IsNullOrEmpty(ip)) RunPowerShell("-NoExit -File \"" + Path.Combine(projectPath, "Explorer_Agent.ps1") + "\" -ComputerName " + ip);
+            if (!string.IsNullOrEmpty(ip)) {
+                string credPath = Path.Combine(projectPath, "core0-cred.xml");
+                if (!File.Exists(credPath)) {
+                    var result = MessageBox.Show("No hay credenciales guardadas.\n¿Desea configurarlas ahora?", "Credenciales", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+                    if (result == DialogResult.Yes) {
+                        RunPowerShell("-NoExit -File \"" + Path.Combine(projectPath, "Set-NetworkCredential.ps1") + "\"");
+                        return;
+                    }
+                }
+                RunPowerShell("-NoExit -File \"" + Path.Combine(projectPath, "Explorer_Agent.ps1") + "\" -ComputerName \"" + ip + "\"");
+            }
         };
         btnShell.Click += (s, e) => {
             string ip = Interaction.InputBox("IP:", "Shell", "192.168.1.14");
