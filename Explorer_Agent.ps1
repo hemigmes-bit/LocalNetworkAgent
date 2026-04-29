@@ -125,12 +125,17 @@ function Show-Folder {
         }
     }
     catch {
-        [Windows.Forms.MessageBox]::Show("Error: $($_.Exception.Message)")
-        $global:currentPath = "__NETWORK__"
+        $errMsg = $_.Exception.Message
+        if ($errMsg -match "Path") {
+            $errMsg = "Error de ruta: verifique que la carpeta exista"
+        }
+        [Windows.Forms.MessageBox]::Show("Error: $errMsg")
+        $global:currentPath = "__DRIVES__"
         Show-Folder
     }
 }
 
+# Navigation - use double click only
 $listView.Add_DoubleClick({
     if ($listView.SelectedItems.Count -gt 0) {
         $item = $listView.SelectedItems[0]
