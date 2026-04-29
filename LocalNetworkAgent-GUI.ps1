@@ -11,17 +11,14 @@ $global:devices = @()
 $global:scanning = $false
 $global:selectedDevice = $null
 
-# Cargar config
 if (Test-Path $configPath) {
     $global:config = Get-Content $configPath -Raw | ConvertFrom-Json
 }
 
-# Cargar credenciales
 if (Test-Path $credPath) {
     $global:cred = Import-CliXml $credPath
 }
 
-# UI PRINCIPAL
 $form = New-Object System.Windows.Forms.Form
 $form.Text = "Local Network Agent v2.2.0"
 $form.Size = New-Object System.Drawing.Size(1200, 750)
@@ -29,7 +26,6 @@ $form.StartPosition = "CenterScreen"
 $form.BackColor = [System.Drawing.Color]::FromArgb(30, 30, 46)
 $form.ForeColor = [System.Drawing.Color]::White
 
-# Panel titulo
 $titlePanel = New-Object System.Windows.Forms.Panel
 $titlePanel.Dock = "Top"
 $titlePanel.Height = 60
@@ -52,7 +48,8 @@ $btnScan.ForeColor = [System.Drawing.Color]::White
 $btnScan.Add_Click({ Start-NetworkScan })
 $titlePanel.Controls.Add($btnScan)
 
-# Panel izquierdo - Dispositivos
+$form.Controls.Add($titlePanel)
+
 $leftPanel = New-Object System.Windows.Forms.Panel
 $leftPanel.Dock = "Left"
 $leftPanel.Width = 350
@@ -86,12 +83,12 @@ $deviceList.Columns.Add("Estado", 60)
 $deviceList.Add_DoubleClick({ Show-DeviceInfo })
 $leftPanel.Controls.Add($deviceList)
 
-# Panel derecho - Acciones y detalles
+$form.Controls.Add($leftPanel)
+
 $rightPanel = New-Object System.Windows.Forms.Panel
 $rightPanel.Dock = "Fill"
 $rightPanel.BackColor = [System.Drawing.Color]::FromArgb(30, 30, 46)
 
-# Panel info dispositivo
 $infoPanel = New-Object System.Windows.Forms.Panel
 $infoPanel.Location = New-Object System.Drawing.Point(10, 10)
 $infoPanel.Size = New-Object System.Drawing.Size(780, 200)
@@ -99,7 +96,7 @@ $infoPanel.BackColor = [System.Drawing.Color]::FromArgb(40, 40, 55)
 $infoPanel.BorderStyle = "FixedSingle"
 
 $lblInfoTitle = New-Object System.Windows.Forms.Label
-$lblInfoTitle.Text = "INFORMACIÓN DEL DISPOSITIVO"
+$lblInfoTitle.Text = "INFORMACION DEL DISPOSITIVO"
 $lblInfoTitle.Font = New-Object System.Drawing.Font("Segoe UI", 12, [System.Drawing.FontStyle]::Bold)
 $lblInfoTitle.ForeColor = [System.Drawing.Color]::FromArgb(0, 217, 255)
 $lblInfoTitle.Location = New-Object System.Drawing.Point(10, 10)
@@ -115,7 +112,6 @@ $infoPanel.Controls.Add($lblInfo)
 
 $rightPanel.Controls.Add($infoPanel)
 
-# Panel botones acciones
 $actionPanel = New-Object System.Windows.Forms.Panel
 $actionPanel.Location = New-Object System.Drawing.Point(10, 220)
 $actionPanel.Size = New-Object System.Drawing.Size(780, 80)
@@ -129,7 +125,6 @@ $lblActions.ForeColor = [System.Drawing.Color]::Cyan
 $lblActions.Location = New-Object System.Drawing.Point(10, 8)
 $actionPanel.Controls.Add($lblActions)
 
-# Botones acciones
 $btnFiles = New-Object System.Windows.Forms.Button
 $btnFiles.Text = "ARCHIVOS"
 $btnFiles.Location = New-Object System.Drawing.Point(10, 35)
@@ -182,7 +177,6 @@ $actionPanel.Controls.Add($btnIntercom)
 
 $rightPanel.Controls.Add($actionPanel)
 
-# Panel API
 $apiPanel = New-Object System.Windows.Forms.Panel
 $apiPanel.Location = New-Object System.Drawing.Point(10, 310)
 $apiPanel.Size = New-Object System.Drawing.Size(780, 150)
@@ -226,12 +220,7 @@ $apiPanel.Controls.Add($txtLog)
 
 $rightPanel.Controls.Add($apiPanel)
 
-# Agregar paneles al form
-$form.Controls.Add($titlePanel)
-$form.Controls.Add($leftPanel)
 $form.Controls.Add($rightPanel)
-
-# FUNCIONES
 
 function Start-NetworkScan {
     if ($global:scanning) { return }
@@ -390,12 +379,10 @@ function Toggle-Api {
     }
 }
 
-# Iniciar escaneo automatico
 $form.Add_Shown({
     Start-NetworkScan
 })
 
-# Mostrar formulario
 if ($Minimized) {
     $form.WindowState = [System.Windows.Forms.FormWindowState]::Minimized
 }
