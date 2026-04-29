@@ -60,15 +60,30 @@ $btnScan.Add_Click({
     Start-Process powershell -ArgumentList "-NoExit -File `"$projectPath\Scan-Network.ps1`""
 })
 
+function Get-SelectedComputer {
+    $configFile = "$projectPath\network-config.json"
+    if (-not (Test-Path $configFile)) { return $null }
+    $config = Get-Content $configFile -Raw | ConvertFrom-Json
+    $names = @()
+    $ipMap = @{}
+    foreach ($pc in $config.Computers) {
+        $names += $pc.Name
+        $ipMap[$pc.Name] = $pc.IP
+    }
+    $selection = $names | ForEach-Object { $_ } | Out-GridView -Title "Seleccionar dispositivo" -PassThru
+    if ($selection -and $ipMap.ContainsKey($selection)) { return $ipMap[$selection] }
+    return $null
+}
+
 $btnFiles.Add_Click({
-    $ip = [Microsoft.VisualBasic.Interaction]::InputBox("IP:", "Archivos", "192.168.1.14")
+    $ip = Get-SelectedComputer
     if ($ip) {
         Start-Process powershell -ArgumentList "-NoExit -File `"$projectPath\Explorer_Agent.ps1`" -ComputerName $ip"
     }
 })
 
 $btnShell.Add_Click({
-    $ip = [Microsoft.VisualBasic.Interaction]::InputBox("IP:", "Shell", "192.168.1.14")
+    $ip = Get-SelectedComputer
     if ($ip) {
         Start-Process powershell -ArgumentList "-NoExit -Command `"Import-Module '$projectPath\NetworkUtilsPublic.psm1'; Connect-RemoteComputer -ComputerName $ip`""
     }
@@ -79,14 +94,14 @@ $btnVoice.Add_Click({
 })
 
 $btnIntercom.Add_Click({
-    $ip = [Microsoft.VisualBasic.Interaction]::InputBox("IP:", "Intercom", "192.168.1.14")
+    $ip = Get-SelectedComputer
     if ($ip) {
         Start-Process powershell -ArgumentList "-NoExit -File `"$projectPath\Intercom.ps1`" -ComputerName $ip"
     }
 })
 
 $btnSpeak.Add_Click({
-    $ip = [Microsoft.VisualBasic.Interaction]::InputBox("IP:", "Voz", "192.168.1.10")
+    $ip = Get-SelectedComputer
     if ($ip) {
         Start-Process powershell -ArgumentList "-NoExit -File `"$projectPath\Speak-Remote.ps1`" -ComputerName $ip"
     }
