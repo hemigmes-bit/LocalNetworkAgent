@@ -5,6 +5,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Threading;
 using Microsoft.VisualBasic;
+using System.Text.Json;
 
 namespace LocalNetworkAgent;
 
@@ -73,7 +74,7 @@ public class NetworkAgentLauncher : Form
             Process.Start(psi);
         };
         btnFiles.Click += (s, e) => {
-            string ip = Interaction.InputBox("IP:", "Archivos", "192.168.1.14");
+            string? ip = SelectComputerFromConfig("Archivos");
             if (!string.IsNullOrEmpty(ip)) {
                 string credPath = Path.Combine(projectPath, "core0-cred.xml");
                 if (!File.Exists(credPath)) {
@@ -87,7 +88,7 @@ public class NetworkAgentLauncher : Form
             }
         };
         btnShell.Click += (s, e) => {
-            string ip = Interaction.InputBox("IP:", "Shell", "192.168.1.14");
+            string? ip = SelectComputerFromConfig("Shell");
             if (!string.IsNullOrEmpty(ip)) {
                 string credPath = Path.Combine(projectPath, "core0-cred.xml");
                 if (!File.Exists(credPath)) {
@@ -101,12 +102,12 @@ public class NetworkAgentLauncher : Form
             }
         };
         btnIntercom.Click += (s, e) => {
-            string ip = Interaction.InputBox("IP:", "Intercom", "192.168.1.14");
-            if (!string.IsNullOrEmpty(ip)) RunPowerShell("-NoExit -File \"" + Path.Combine(projectPath, "Intercom.ps1") + "\" -ComputerName " + ip);
+            string? ip = SelectComputerFromConfig("Intercom");
+            if (!string.IsNullOrEmpty(ip)) RunPowerShell("-NoExit -File \"" + Path.Combine(projectPath, "Intercom.ps1") + "\" -ComputerName \"" + ip + "\"");
         };
         btnSpeak.Click += (s, e) => {
-            string ip = Interaction.InputBox("IP:", "Voz", "192.168.1.10");
-            if (!string.IsNullOrEmpty(ip)) RunPowerShell("-NoExit -File \"" + Path.Combine(projectPath, "Speak-Remote.ps1") + "\" -ComputerName " + ip);
+            string? ip = SelectComputerFromConfig("Voz");
+            if (!string.IsNullOrEmpty(ip)) RunPowerShell("-NoExit -File \"" + Path.Combine(projectPath, "Speak-Remote.ps1") + "\" -ComputerName \"" + ip + "\"");
         };
         btnPowerCore0.Click += (s, e) => {
             RunPowerShell("-Command \"Import-Module '" + Path.Combine(projectPath, "NetworkUtilsPublic.psm1") + "'; Send-WakeOnLan -MACAddress (Get-Content network-config.json | ConvertFrom-Json).Core0MAC\"");
@@ -126,6 +127,66 @@ public class NetworkAgentLauncher : Form
         this.Controls.Add(lblStatus);
         this.Controls.Add(lblToken);
         this.Controls.Add(txtLog);
+    }
+
+    private string? SelectComputerFromConfig(string title, string defaultIp = "192.168.1.16") {
+        var configPath = Path.Combine(projectPath, "network-config.json");
+        var form = new Form { Width = 320, Height = 170, Text = title, StartPosition = FormStartPosition.CenterParent, FormBorderStyle = FormBorderStyle.FixedDialog, MaximizeBox = false, BackColor = Color.FromArgb(26, 26, 46), ForeColor = Color.White };
+        
+        var lbl = new Label { Text = "Seleccionar dispositivo:", Left = 15, Top = 15, Width = 280, ForeColor = Color.White };
+        var combo = new ComboBox { Left = 15, Top = 40, Width = 250, DropDownStyle = ComboBoxStyle.DropDownList };
+        var btnOk = new Button { Text = "Conectar", Left = 180, Width = 90, Top = 90, BackColor = Color.FromArgb(0, 200, 83), ForeColor = Color.White, FlatStyle = FlatStyle.Flat };
+        var btnCancel = new Button { Text = "Cancelar", Left = 85, Width = 90, Top = 90, BackColor = Color.FromArgb(233, 69, 96), ForeColor = Color.White, FlatStyle = FlatStyle.Flat };
+        
+        try {
+            if (File.Exists(configPath)) {
+                var json = File.ReadAllText(configPath);
+                if (json.Contains("Computers")) {
+                    var computers = json.Split(new[] { "Name" }, StringSplitOptions.RemoveEmptyEntries);
+                    foreach (var c in computers) {
+                        if (c.Contains("\":\"")) {
+                            var nameStart = c.IndexOf("\"") + 1;
+                            if (nameStart > 0 && nameStart < c.Length) {
+                                var nameEnd = c.IndexOf("\"", nameStart);
+                                if (nameEnd > nameStart) {
+                                    var name = c.Substring(nameStart, nameEnd - nameStart);
+                                    var ipStart = c.IndexOf("IP\"");
+                                    if (ipStart > 0) {
+                                        ipStart = c.IndexOf("\"", ipStart + 3) + 1;
+                                        var ipEnd = c.IndexOf("\"", ipStart);
+                                        if (ipEnd > ipStart) {
+                                            var ip = c.Substring(ipStart, ipEnd - ipStart);
+                                            if (!combo.Items.Contains(name + " (" + ip + ")")) {
+                                                combo.Items.Add(name + " (" + ip + ")");
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            if (combo.Items.Count == 0) combo.Items.Add(defaultIp);
+            combo.SelectedIndex = 0;
+        } catch { combo.Items.Add(defaultIp); combo.SelectedIndex = 0; }
+        
+        string? result = null;
+        btnOk.Click += (s, e) => { 
+            var selected = combo.Text;
+            if (selected.Contains("(") && selected.Contains(")")) {
+                var start = selected.IndexOf("(") + 1;
+                var end = selected.IndexOf(")");
+                selected = selected.Substring(start, end - start);
+            }
+            result = selected; 
+            form.Close(); 
+        };
+        btnCancel.Click += (s, e) => { result = null; form.Close(); };
+        
+        form.Controls.AddRange(new Control[] { lbl, combo, btnOk, btnCancel });
+        form.ShowDialog();
+        return result;
     }
 
     private void LogLine(string txt) => txtLog.AppendText("[" + DateTime.Now.ToString("HH:mm:ss") + "] " + txt + Environment.NewLine);
