@@ -1,0 +1,40 @@
+{
+  "mcpServers": {
+    "network-tools": {
+      "command": "node",
+      "args": ["mcp-servers/network-tools/index.js"]
+    },
+    "wol-server": {
+      "command": "node",
+      "args": ["mcp-servers/wol-server/index.js"]
+    },
+    "ping-server": {
+      "command": "node",
+      "args": ["mcp-servers/ping-server/index.js"]
+    },
+    "file-system": {
+      "command": "node",
+      "args": ["mcp-servers/file-system/index.js"]
+    },
+    "smb-server": {
+      "command": "node",
+      "args": ["mcp-servers/smb-server/index.js"]
+    },
+    "ftp-server": {
+      "command": "node",
+      "args": ["mcp-servers/ftp-server/index.js"]
+    },
+    "vscode-server": {
+      "command": "node",
+      "args": ["mcp-servers/vscode-server/index.js"]
+    },
+    "git-server": {
+      "command": "node",
+      "args": ["mcp-servers/git-server/index.js"]
+    },
+    "terminal-server": {
+      "command": "node",
+      "args": ["mcp-servers/terminal-server/index.js"]
+    }
+  }
+}

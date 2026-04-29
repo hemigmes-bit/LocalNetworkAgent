@@ -1,0 +1,23 @@
+{
+    "Port":  5985,
+    "SubnetPrefix":  "192.168.1",
+    "Computers":  [
+                      {
+                          "Name":  "livebox.home",
+                          "IP":  "192.168.1.1",
+                          "OS":  null,
+                          "OpenPorts":  "80,443"
+                      },
+                      {
+                          "Name":  "VICTORYMAR.home",
+                          "IP":  "192.168.1.16",
+                          "OS":  "Microsoft Windows 11 Pro",
+                          "OpenPorts":  "5985"
+                      }
+                  ],
+    "NtfyTopic":  "local-network-agent",
+    "ScheduledTasks":  [
+
+                       ],
+    "Core0MAC":  "5C:85:7E:41:80:2B"
+}

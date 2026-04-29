@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "github.com/modelcontextprotocol/servers/tree/main/src/filesystem": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-filesystem",
+        "c:\\Users\\Usuario\\LocalNetworkAgent"
+      ],
+      "disabled": false,
+      "autoApprove": []
+    }
+  }
+}
