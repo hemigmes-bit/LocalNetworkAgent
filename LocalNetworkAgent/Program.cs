@@ -78,7 +78,17 @@ public class NetworkAgentLauncher : Form
         };
         btnShell.Click += (s, e) => {
             string ip = Interaction.InputBox("IP:", "Shell", "192.168.1.14");
-            if (!string.IsNullOrEmpty(ip)) RunPowerShell("-NoExit -Command \"Import-Module '" + Path.Combine(projectPath, "NetworkUtilsPublic.psm1") + "'; Connect-RemoteComputer -ComputerName " + ip + "\"");
+            if (!string.IsNullOrEmpty(ip)) {
+                string credPath = Path.Combine(projectPath, "core0-cred.xml");
+                if (!File.Exists(credPath)) {
+                    var result = MessageBox.Show("No hay credenciales guardadas.\n¿Desea configurarlas ahora?", "Credenciales", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+                    if (result == DialogResult.Yes) {
+                        RunPowerShell("-NoExit -File \"" + Path.Combine(projectPath, "Set-NetworkCredential.ps1") + "\"");
+                        return;
+                    }
+                }
+                RunPowerShell("-NoExit -Command \"Import-Module '" + Path.Combine(projectPath, "NetworkUtilsPublic.psm1") + "'; Connect-RemoteComputer -ComputerName " + ip + "\"");
+            }
         };
         btnIntercom.Click += (s, e) => {
             string ip = Interaction.InputBox("IP:", "Intercom", "192.168.1.14");
