@@ -386,4 +386,6 @@ $form.Add_Shown({
 if ($Minimized) {
     $form.WindowState = [System.Windows.Forms.FormWindowState]::Minimized
 }
+
+Write-Host "Iniciando GUI..." -ForegroundColor Cyan
 [System.Windows.Forms.Application]::Run($form)
