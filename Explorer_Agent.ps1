@@ -33,7 +33,7 @@ $header.Controls.Add($lblPath)
 
 # LISTADO (ListView para iconos)
 $listView = New-Object Windows.Forms.ListView
-$listView.Dock = "Fill"; $listView.View = "Details"; $listView.FullRowSelect = $true; $listView.BackColor = [Drawing.Color]::FromArgb(30, 30, 30); $listView.ForeColor = [Drawing.Color]::White
+$listView.Dock = "Fill"; $listView.View = "Details"; $listView.FullRowSelect = $true; $listView.BackColor = [Drawing.Color]::FromArgb(30, 30, 30); $listView.ForeColor = [Drawing.Color]::White; $listView.LabelEdit = $false; $listView.HideSelection = $false
 $listView.Columns.Add("Nombre", 400) | Out-Null
 $listView.Columns.Add("Tipo / Tamaño", 200) | Out-Null
 $listView.Columns.Add("Estado", 150) | Out-Null
@@ -110,23 +110,28 @@ function Refresh-Explorer {
                 $listView.Items.Add($item)
             }
         }
-    } catch {
+} catch {
         [Windows.Forms.MessageBox]::Show("Error: $($_.Exception.Message)")
-        $global:currentPath = "__NETWORK__"; Refresh-Explorer
+        $global:currentPath = "__NETWORK__"
+        Refresh-Explorer
     }
 }
 
+# Habilitar double-click
 $listView.Add_DoubleClick({
     if ($listView.SelectedItems.Count -gt 0) {
-        $data = $listView.SelectedItems[0].Tag
-        if ($data.Type -eq "PC") {
-            $global:currentComputer = $data.IP
-            $global:currentPath = "__DRIVES__"
-            Refresh-Explorer
-        }
-        elseif ($data.Type -eq "Drive" -or $data.Type -eq "Dir") {
-            $global:currentPath = $data.Path
-            Refresh-Explorer
+        $item = $listView.SelectedItems[0]
+        if ($item.Tag) {
+            $data = $item.Tag
+            if ($data.Type -eq "PC") {
+                $global:currentComputer = $data.IP
+                $global:currentPath = "__DRIVES__"
+                Refresh-Explorer
+            }
+            elseif ($data.Type -eq "Drive" -or $data.Type -eq "Dir") {
+                $global:currentPath = $data.Path
+                Refresh-Explorer
+            }
         }
     }
 })
