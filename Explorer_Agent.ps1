@@ -36,7 +36,8 @@ $listView = New-Object Windows.Forms.ListView
 $listView.Dock = "Fill"; $listView.View = "Details"; $listView.FullRowSelect = $true; $listView.BackColor = [Drawing.Color]::FromArgb(30, 30, 30); $listView.ForeColor = [Drawing.Color]::White
 $listView.Columns.Add("Nombre", 400) | Out-Null
 $listView.Columns.Add("Tipo / Tamaño", 200) | Out-Null
-$listView.Columns.Add("Estado", 150) | Out-Null`n$listView.Columns.Add("Modificado", 180) | Out-Null
+$listView.Columns.Add("Estado", 150) | Out-Null
+$listView.Columns.Add("Modificado", 180) | Out-Null
 $listView.Font = New-Object Drawing.Font("Segoe UI", 10)
 
 # PANEL LATERAL DE ACCIONES
