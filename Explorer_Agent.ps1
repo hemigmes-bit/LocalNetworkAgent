@@ -50,7 +50,7 @@ function Add-Btn {
     $b.Text = $txt; $b.Top = $top; $b.Left = 10; $b.Width = 180; $b.Height = 45; $b.FlatStyle = "Flat"
     $b.BackColor = [Drawing.Color]::FromArgb($rgb[0], $rgb[1], $rgb[2])
     $b.Add_Click($click)
-$side.Controls.Add($b)
+    $side.Controls.Add($b)
 }
 
 # --- LÓGICA DE NAVEGACIÓN ---
