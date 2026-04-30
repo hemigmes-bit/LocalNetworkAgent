@@ -187,18 +187,31 @@ $listView.Add_MouseClick({
 })
 
 Add-Button "ATRAS" 10 @(128,128,128) {
-    if ($global:currentPath -eq "__NETWORK__") { return }
-    if ($global:currentPath -eq "__DRIVES__") { $global:currentPath = "__NETWORK__"; Show-Folder; return }
-    if ($global:currentPath -match "^[A-Za-z]:\\$") { $global:currentPath = "__DRIVES__"; Show-Folder; return }
+    if ($global:currentPath -eq "__NETWORK__" -or $global:currentPath -eq "__DRIVES__") { 
+        $global:currentPath = "__DRIVES__"
+        Show-Folder
+        return 
+    }
+    if ([string]::IsNullOrEmpty($global:currentPath)) { 
+        $global:currentPath = "__DRIVES__"
+        Show-Folder
+        return 
+    }
+    if ($global:currentPath -match "^[A-Za-z]:\\$") { 
+        $global:currentPath = "__DRIVES__"
+        Show-Folder
+        return 
+    }
     $global:currentPath = Split-Path $global:currentPath -Parent
+    if ([string]::IsNullOrEmpty($global:currentPath)) { $global:currentPath = "__DRIVES__" }
     Show-Folder
 }
 
 Add-Button "COPIAR" 70 @(0,0,139) {
     if ($listView.SelectedItems.Count -gt 0) {
         $data = $listView.SelectedItems[0].Tag
-        if ($data.Type -eq "File") {
-            $global:clipboardFile = @{ PC=$global:currentComputer; Path=$data.Path; Name=(Split-Path $data.Path -Leaf) }
+        if ($data.Type -eq "File" -and $data.Path) {
+            $global:clipboardFile = @{ PC=$global:currentComputer; Path=$data.Path; Name=($data.Path -replace '^.+\\', '') }
             [Windows.Forms.MessageBox]::Show("Copiado: $($global:clipboardFile.Name)")
         }
     }
