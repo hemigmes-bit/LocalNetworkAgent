@@ -310,7 +310,12 @@ function Open-Files {
         [System.Windows.Forms.MessageBox]::Show("Seleccione un dispositivo primero", "Aviso")
         return
     }
-    Start-Process powershell.exe -ArgumentList "-WindowStyle Hidden -ExecutionPolicy Bypass -NoExit -File `"$projectPath\Explorer_Agent.ps1`" -ComputerName $($global:selectedDevice.IP)" -WindowStyle Hidden
+    $ip = $global:selectedDevice.IP
+    try {
+        Start-Process explorer.exe "\\\\$ip\C$"
+    } catch {
+        [System.Windows.Forms.MessageBox]::Show("Error al abrir: $_", "Error")
+    }
 }
 
 function Open-Shell {
