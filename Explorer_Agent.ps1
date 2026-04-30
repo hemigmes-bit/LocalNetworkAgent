@@ -109,14 +109,15 @@ function Show-Folder {
                     $item.SubItems.Add("Carpeta") | Out-Null
                     $item.ForeColor = [Drawing.Color]::Yellow
                     $newPath = $global:currentPath + "\" + $f.Name
+                    $item.Tag = @{ Type="Dir"; Path=$newPath }
                 }
                 else {
                     $item.SubItems.Add("$([math]::Round($f.Length/1KB,1)) KB") | Out-Null
                     $newPath = $global:currentPath + "\" + $f.Name
+                    $item.Tag = @{ Type="File"; Path=$newPath }
                 }
                 $item.SubItems.Add("") | Out-Null
                 $item.SubItems.Add($f.LastWriteTime.ToString("dd/MM/yyyy HH:mm")) | Out-Null
-                $item.Tag = @{ Type=($f.PSIsContainer ? "Dir" : "File"); Path=$newPath }
                 $listView.Items.Add($item)
             }
         }
