@@ -108,18 +108,15 @@ function Show-Folder {
                 if ($f.PSIsContainer) {
                     $item.SubItems.Add("Carpeta") | Out-Null
                     $item.ForeColor = [Drawing.Color]::Yellow
+                    $newPath = $global:currentPath + "\" + $f.Name
                 }
                 else {
                     $item.SubItems.Add("$([math]::Round($f.Length/1KB,1)) KB") | Out-Null
+                    $newPath = $global:currentPath + "\" + $f.Name
                 }
                 $item.SubItems.Add("") | Out-Null
                 $item.SubItems.Add($f.LastWriteTime.ToString("dd/MM/yyyy HH:mm")) | Out-Null
-                if ($f.PSIsContainer) {
-                    $item.Tag = @{ Type="Dir"; Path=(Join-Path $global:currentPath $f.Name) }
-                }
-                else {
-                    $item.Tag = @{ Type="File"; Path=(Join-Path $global:currentPath $f.Name) }
-                }
+                $item.Tag = @{ Type=($f.PSIsContainer ? "Dir" : "File"); Path=$newPath }
                 $listView.Items.Add($item)
             }
         }
