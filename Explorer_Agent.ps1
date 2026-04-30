@@ -34,6 +34,21 @@ $lblPath.TextAlign = "MiddleLeft"
 $lblPath.Font = New-Object Drawing.Font("Segoe UI", 11)
 $header.Controls.Add($lblPath)
 
+$lblProgress = New-Object Windows.Forms.Label
+$lblProgress.Text = ""
+$lblProgress.Location = New-Object Drawing.Point(10, 65)
+$lblProgress.Size = New-Object Drawing.Size(800, 25)
+$lblProgress.ForeColor = [Drawing.Color]::Lime
+$lblProgress.Font = New-Object Drawing.Font("Consolas", 9)
+$form.Controls.Add($lblProgress)
+
+$progressBar = New-Object Windows.Forms.ProgressBar
+$progressBar.Location = New-Object Drawing.Point(10, 90)
+$progressBar.Size = New-Object Drawing.Size(800, 20)
+$progressBar.Style = "Continuous"
+$progressBar.Visible = $false
+$form.Controls.Add($progressBar)
+
 $listView = New-Object Windows.Forms.ListView
 $listView.Dock = "Fill"
 $listView.View = "Details"
@@ -192,20 +207,47 @@ Add-Button "COPIAR" 70 @(0,0,139) {
 Add-Button "PEGAR" 125 @(0,100,0) {
     if ($null -eq $global:clipboardFile) { return }
     if ($global:currentPath -eq "__NETWORK__" -or $global:currentPath -eq "__DRIVES__") { return }
+    $progressBar.Visible = $true
+    $progressBar.Value = 0
+    $lblProgress.Text = "Copiando $($global:clipboardFile.Name)..."
+    $form.Refresh()
     try {
-        $temp = Join-Path $env:TEMP $global:clipboardFile.Name
-        $s1 = New-PSSession -ComputerName $global:clipboardFile.PC -Credential $cred
+        $fileName = $global:clipboardFile.Name
+        $sourcePC = $global:clipboardFile.PC
+        $destPath = $global:currentPath
+        $lblProgress.Text = "Desde $sourcePC hasta $destPath"
+        
+        $temp = Join-Path $env:TEMP $fileName
+        $s1 = New-PSSession -ComputerName $sourcePC -Credential $cred
+        $progressBar.Value = 25
+        $form.Refresh()
+        
         Copy-Item -FromSession $s1 -Path $global:clipboardFile.Path -Destination $temp -Force
+        $progressBar.Value = 50
+        $form.Refresh()
         Remove-PSSession $s1
+        
         $s2 = New-PSSession -ComputerName $global:currentComputer -Credential $cred
-        Copy-Item -ToSession $s2 -Path $temp -Destination $global:currentPath -Force
+        $progressBar.Value = 75
+        $form.Refresh()
+        
+        Copy-Item -ToSession $s2 -Path $temp -Destination $destPath -Force
+        $progressBar.Value = 90
+        $form.Refresh()
         Remove-PSSession $s2
         Remove-Item $temp -Force
+        
+        $progressBar.Value = 100
+        $lblProgress.Text = "Completado: $fileName"
+        $form.Refresh()
+        Start-Sleep 1500
+        $progressBar.Visible = $false
+        $lblProgress.Text = ""
         Show-Folder
-        [Windows.Forms.MessageBox]::Show("Archivo pegado")
     }
     catch {
-        [Windows.Forms.MessageBox]::Show("Error: $($_.Exception.Message)")
+        $progressBar.Visible = $false
+        $lblProgress.Text = "Error: $($_.Exception.Message)"
     }
 }
 
