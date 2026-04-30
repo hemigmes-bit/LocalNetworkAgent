@@ -311,11 +311,8 @@ function Open-Files {
         return
     }
     $ip = $global:selectedDevice.IP
-    try {
-        Start-Process explorer.exe "\\\\$ip\C$"
-    } catch {
-        [System.Windows.Forms.MessageBox]::Show("Error al abrir: $_", "Error")
-    }
+    $path = "\\$ip\C$"
+    Start-Process explorer.exe $path
 }
 
 function Open-Shell {
