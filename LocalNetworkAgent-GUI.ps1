@@ -243,7 +243,7 @@ function Start-NetworkScan {
     if ($global:scanning) { return }
     $global:scanning = $true
     
-    $lblStatus.Text = "Escaneando dispositivos..."
+    $lblStatus.Text = "Buscando dispositivos..."
     $global:deviceList.Items.Clear()
     $btnScan.Enabled = $false
     
@@ -254,90 +254,64 @@ function Start-NetworkScan {
         return
     }
     
-    $subnet = $global:config.SubnetPrefix
-    
-    $script:scanJob = {
-        param($sn, $knownIPs)
-        $results = @()
-        
-        $allIPs = @()
-        if ($knownIPs -and $knownIPs.Count -gt 0) {
-            $allIPs += $knownIPs
-        }
-        for ($i = 1; $i -le 20; $i++) {
-            $ip = "$sn.$i"
-            $found = $false
-            foreach ($k in $allIPs) { if ($k -eq $ip) { $found = $true } }
-            if (-not $found) { $allIPs += $ip }
-        }
-        
-        $ping = New-Object System.Net.NetworkInformation.Ping
-        
-        foreach ($ip in $allIPs) {
-            try {
-                $res = $ping.Send($ip, 150)
-                if ($res.Status -eq "Success") {
-                    $hostname = $ip
-                    try { 
-                        $entry = [System.Net.Dns]::GetHostEntry($ip)
-                        if ($entry) { $hostname = $entry.HostName }
-                    } catch {}
-                    $results += [PSCustomObject]@{
-                        IP = $ip
-                        Hostname = $hostname
-                        Status = "Online"
-                    }
-                }
-            } catch {}
-        }
-        $ping.Dispose()
-        $results
-    }
-    
-    $knownIPs = @()
+    $knownList = @()
     foreach ($c in $global:config.Computers) {
-        if ($c.IP) { $knownIPs += $c.IP }
+        if ($c.IP) { $knownList += $c.IP }
     }
     
-    $job = Start-Job -ScriptBlock $script:scanJob -ArgumentList $subnet,$knownIPs
+    $global:lblStatus.Text = "Escaneando $($knownList.Count) dispositivos..."
     
-    $foundCount = 0
-    
-    $timer = New-Object System.Windows.Forms.Timer
-    $timer.Interval = 500
-    $timer.Add_Tick({
-        $state = $job.State
-        if ($state -eq "Completed" -or $state -eq "Failed") {
+    $worker = {
+        param($targetIP)
+        $results = @()
+        foreach ($ip in $targetIP) {
             try {
-                $results = Receive-Job -Job $job -ErrorAction SilentlyContinue
-                if ($results -and $results.Count -gt 0) {
-                    foreach ($r in $results) {
-                        if ($r.IP) {
-                            $item = New-Object System.Windows.Forms.ListViewItem($r.Hostname)
-                            $item.SubItems.Add($r.IP) | Out-Null
-                            $item.SubItems.Add($r.Status) | Out-Null
-                            $item.Tag = $r
-                            if ($r.Hostname -eq $r.IP) { 
-                                $item.ForeColor = [System.Drawing.Color]::Yellow 
-                            } else { 
-                                $item.ForeColor = [System.Drawing.Color]::Lime 
-                            }
-                            $global:deviceList.Items.Add($item)
-                            $foundCount++
-                        }
+                $ping = New-Object System.Net.NetworkInformation.Ping
+                $reply = $ping.Send($ip, 200)
+                if ($reply.Status -eq "Success") {
+                    $host = $ip
+                    try { $host = ([System.Net.Dns]::GetHostEntry($ip)).HostName } catch {}
+                    $results += @{ IP = $ip; Host = $host; Status = "Online" }
+                }
+                $ping.Dispose()
+            } catch {}
+        }
+        return $results
+    }
+    
+    $job = Start-Job -ScriptBlock $worker -ArgumentList $knownList
+    
+    $global:scanTimer = New-Object System.Windows.Forms.Timer
+    $global:scanTimer.Interval = 300
+    
+    $jobCheck = {
+        if ($job.State -eq "Completed") {
+            $data = Receive-Job -Job $job
+            $count = 0
+            if ($data -and $data.Count -gt 0) {
+                foreach ($d in $data) {
+                    if ($d.IP) {
+                        $it = New-Object System.Windows.Forms.ListViewItem($d.Host)
+                        $it.SubItems.Add($d.IP) | Out-Null
+                        $it.SubItems.Add($d.Status) | Out-Null
+                        $it.Tag = $d
+                        $it.ForeColor = [System.Drawing.Color]::Lime
+                        $global:deviceList.Items.Add($it)
+                        $count++
                     }
                 }
-            } catch {}
-            
-            $lblStatus.Text = "Encontrados: $foundCount"
+            }
+            $global:lblStatus.Text = "Encontrados: $count"
             $global:scanning = $false
             $btnScan.Enabled = $true
-            $timer.Stop()
-            $timer.Dispose()
-            Remove-Job $job -Force -ErrorAction SilentlyContinue
+            $global:scanTimer.Stop()
+            $global:scanTimer.Dispose()
+            Remove-Job $job -Force
         }
-    })
-    $timer.Start()
+    }
+    
+    $global:scanTimer.Add_Tick($jobCheck)
+    $global:scanTimer.Start()
 }
 
 function Show-DeviceInfo {
