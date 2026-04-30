@@ -312,8 +312,7 @@ function Open-Files {
     }
     $ip = $global:selectedDevice.IP
     $name = $global:selectedDevice.Hostname
-    [System.Windows.Forms.MessageBox]::Show("Abiendo $name ($ip)", "Archivos")
-    Start-Process "explorer.exe" "/root,\\$ip\C$"
+    Start-Process powershell.exe -ArgumentList "-NoExit -File `"$projectPath\Explorer_Agent.ps1`" -ComputerName $ip"
 }
 
 function Open-Shell {
