@@ -311,8 +311,9 @@ function Open-Files {
         return
     }
     $ip = $global:selectedDevice.IP
-    $path = "\\$ip\C$"
-    Start-Process explorer.exe $path
+    $name = $global:selectedDevice.Hostname
+    [System.Windows.Forms.MessageBox]::Show("Abiendo $name ($ip)", "Archivos")
+    Start-Process "explorer.exe" "/root,\\$ip\C$"
 }
 
 function Open-Shell {
