@@ -3,22 +3,24 @@
 ## Ejecutar
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File "C:\Users\Usuario\LocalNetworkAgent\LocalNetworkAgent-GUI.ps1"
+powershell -ExecutionPolicy Bypass -File "C:\Users\Usuario\LocalNetworkAgent\LocalNetworkAgent- GUI.PS1"
 ```
 
 O hacer doble clic en `Iniciar.bat`
 
 ## Proyecto
 
-- **GUI**: `LocalNetworkAgent-GUI.ps1`
+- **GUI**: `LocalNetworkAgent- GUI.PS1`
 - **C#**: `LocalNetworkAgent/`
 - **Scripts**: `*.ps1`
 
 ## Estado
-
 Última reparación: 24/04/2026 - GUI funcionando
 
 # OpenCode Agent Instructions
+
+## Regla principal
+- **TOMAR ACCIÓN DIRECTA**: No pedir al usuario que haga tareas que puedo hacer yo mismo. Ejecutar sin preguntar para operaciones de sistema, lanzamiento de procesos, y modificaciones de archivos.
 
 ## Entorno de desarrollo
 - OS: Windows 11 x64
@@ -27,8 +29,8 @@ O hacer doble clic en `Iniciar.bat`
 - Package manager: NuGet / npm / Chocolatey
 
 ## Reglas generales
-- Usar siempre rutas Windows con backslash o `Path.Combine()`
-- En PowerShell, variables de entorno con `$env:NOMBRE`
+- Usar siempre rutas Windows con backslash o `Path. Combine()`
+- En PowerShell, variables de entorno con `$env: NOMBRE`
 - Line endings CRLF en scripts `.ps1`
 - Preferir `winget` o `choco` para instalar herramientas del sistema
 - Nunca usar comandos Unix (`ls`, `grep`, `cat`) — usar equivalentes PowerShell
