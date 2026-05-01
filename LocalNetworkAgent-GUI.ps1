@@ -317,10 +317,19 @@ function Open-Files {
 
 function Open-Shell {
     if (-not $global:selectedDevice) {
-        [System.Windows.Forms.MessageBox]::Show("Seleccione un dispositivo primero", "Aviso")
+        [System..Windows.Forms.MessageBox]::Show("Seleccione un dispositivo primero", "Aviso")
         return
     }
-    Start-Process powershell.exe -ArgumentList "-WindowStyle Hidden -ExecutionPolicy Bypass -NoExit -Command `"Import-Module '$projectPath\NetworkUtilsPublic.psm1'; Connect-RemoteComputer -ComputerName $($global:selectedDevice.IP)`"" -WindowStyle Hidden
+    $ip = $global:selectedDevice.IP
+    Start-Process powershell.exe -ArgumentList "-NoExit -File `"$projectPath\RemoteShell.PS1`" -IP $ip"
+}
+    $ip = $global:selectedDevice.IP
+    $credFile = "$projectPath\core0-cred.xml"
+    if (Test-Path $credFile) {
+        Start-Process powershell.exe -ArgumentList "-NoExit -Command `"Enter-PSSession -ComputerName $ip -Credential (Import-CliXml '$credFile')`""
+    } else {
+        Start-Process powershell.exe -ArgumentList "-NoExit -Command `"Enter-PSSession -ComputerName $ip`""
+    }
 }
 
 function Send-WoL {
