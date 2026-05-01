@@ -316,10 +316,19 @@ function Open-Files {
 }
 
 function Open-Shell {
-    if (-not $global:selectedDevice) {
-        [System..Windows.Forms.MessageBox]::Show("Seleccione un dispositivo primero", "Aviso")
-        return
+    if (-not $global:selectedDevice) { [Windows.Forms.MessageBox]::Show("Seleccione un dispositivo"); return }
+    $ip = $global:selectedDevice.IP
+    Start-Process powershell.exe "-NoExit -Command `"Enter-PSSession -ComputerName $ip`""
+}
+    $ip = $global:selectedDevice.IP
+    $cred = "$projectPath\core0-cred.xml"
+    if (Test- Path $cred) {
+        $c = Import- CliXml $cred
+        Start- Process powershell.exe - ArgumentList "-NoExit","Enter- PSSession -ComputerName $ip -Credential `$c"
+    } else {
+        Start- Process powershell.exe - ArgumentList "-NoExit","Enter- PSSession -ComputerName $ip"
     }
+}
     $ip = $global:selectedDevice.IP
     Start-Process powershell.exe -ArgumentList "-NoExit -File `"$projectPath\RemoteShell.PS1`" -IP $ip"
 }

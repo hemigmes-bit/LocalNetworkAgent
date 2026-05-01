@@ -1,0 +1,1 @@
+powershell -Command "Get-Content 'C:\Users\Usuario\LocalNetworkAgent\LocalNetworkAgent-GUI.ps1' | Select-String -Pattern 'function Open-Shell' -Context 0,15"
