@@ -1,13 +1,12 @@
 param([switch]$Minimized = $false)
 
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 
 $projectPath = "C:\Users\Usuario\LocalNetworkAgent"
 $configPath = Join-Path $projectPath "network-config.json"
-$credPath = Join-Path $projectPath "core0-cred.xml"
 
-$global:devices = @()
 $global:scanning = $false
 $global:selectedDevice = $null
 
@@ -15,398 +14,642 @@ if (Test-Path $configPath) {
     $global:config = Get-Content $configPath -Raw | ConvertFrom-Json
 }
 
-if (Test-Path $credPath) {
-    $global:cred = Import-CliXml $credPath
+$form = New-Object System.Windows.Forms.Form
+$form.Text = "Local Network Agent v2.4.0"
+$form.Size = New-Object System.Drawing.Size(1300, 800)
+$form.StartPosition = "CenterScreen"
+$form.FormBorderStyle = "Sizable"
+$form.MinimumSize = New-Object System.Drawing.Size(1100, 700)
+$form.BackColor = [System.Drawing.Color]::FromArgb(10, 10, 20)
+
+$neonCyan = [System.Drawing.Color]::FromArgb(0, 230, 200)
+$neonMagenta = [System.Drawing.Color]::FromArgb(230, 0, 200)
+$neonGreen = [System.Drawing.Color]::FromArgb(0, 230, 120)
+$neonOrange = [System.Drawing.Color]::FromArgb(255, 160, 50)
+$neonBlue = [System.Drawing.Color]::FromArgb(50, 150, 255)
+$darkest = [System.Drawing.Color]::FromArgb(8, 8, 20)
+$dark = [System.Drawing.Color]::FromArgb(15, 15, 32)
+$medium = [System.Drawing.Color]::FromArgb(22, 22, 42)
+$light = [System.Drawing.Color]::FromArgb(35, 35, 55)
+$textDim = [System.Drawing.Color]::FromArgb(140, 140, 160)
+$textBright = [System.Drawing.Color]::FromArgb(220, 220, 240)
+
+function New-CyberButton {
+    param($Text, $X, $Y, $W, $H, $Color, $Action)
+    $btn = New-Object System.Windows.Forms.Button
+    $btn.Text = $Text
+    $btn.Location = New-Object System.Drawing.Point($X, $Y)
+    $btn.Size = New-Object System.Drawing.Size($W, $H)
+    $btn.FlatStyle = "Flat"
+    $btn.FlatAppearance.BorderSize = 1
+    $btn.FlatAppearance.BorderColor = $Color
+    $btn.BackColor = [System.Drawing.Color]::FromArgb(25, 25, 48)
+    $btn.ForeColor = $Color
+    $btn.Font = New-Object System.Drawing.Font("Segoe UI", 9.5, [System.Drawing.FontStyle]::Bold)
+    $btn.Cursor = [System.Windows.Forms.Cursors]::Hand
+    $btn.TextAlign = "MiddleCenter"
+    $btn.Add_Click($Action)
+    return $btn
 }
 
-$form = New-Object System.Windows.Forms.Form
-$form.Text = "Local Network Agent v2.2.0"
-$form.Size = New-Object System.Drawing.Size(1120, 680)
-$form.StartPosition = "CenterScreen"
-$form.FormBorderStyle = "Fixed3D"
-$form.MaximizeBox = $false
-$form.MinimizeBox = $true
+# ─── Menu Strip ─────────────────────────────────────────────────────────────
+$menuStrip = New-Object System.Windows.Forms.MenuStrip
+$menuStrip.BackColor = $darkest
+$menuStrip.ForeColor = $textBright
 
-$global:titlePanel = New-Object System.Windows.Forms.Panel
-$global:titlePanel.Location = New-Object System.Drawing.Point(0, 0)
-$global:titlePanel.Size = New-Object System.Drawing.Size(1120, 65)
-$global:titlePanel.BackColor = [System.Drawing.Color]::FromArgb(45, 45, 60)
-$global:titlePanel.BorderStyle = "FixedSingle"
+$archivoMenu = New-Object System.Windows.Forms.ToolStripMenuItem
+$archivoMenu.Text = "Archivo"
+$archivoMenu.ForeColor = $textBright
 
+$salirItem = New-Object System.Windows.Forms.ToolStripMenuItem
+$salirItem.Text = "Salir"
+$salirItem.Add_Click({ $form.Close() })
+$archivoMenu.DropDownItems.Add($salirItem) | Out-Null
+
+$herramientasMenu = New-Object System.Windows.Forms.ToolStripMenuItem
+$herramientasMenu.Text = "Herramientas"
+$herramientasMenu.ForeColor = $textBright
+
+$scanToolItem = New-Object System.Windows.Forms.ToolStripMenuItem
+$scanToolItem.Text = "Escanear red"
+$scanToolItem.Add_Click({ Start-NetworkScan })
+$herramientasMenu.DropDownItems.Add($scanToolItem) | Out-Null
+
+$apiToolItem = New-Object System.Windows.Forms.ToolStripMenuItem
+$apiToolItem.Text = "Iniciar / Detener API"
+$apiToolItem.Add_Click({ Toggle-Api })
+$herramientasMenu.DropDownItems.Add($apiToolItem) | Out-Null
+
+$ayudaMenu = New-Object System.Windows.Forms.ToolStripMenuItem
+$ayudaMenu.Text = "Ayuda"
+$ayudaMenu.ForeColor = $textBright
+
+$aboutItem = New-Object System.Windows.Forms.ToolStripMenuItem
+$aboutItem.Text = "Acerca de..."
+$aboutItem.Add_Click({ [System.Windows.Forms.MessageBox]::Show("Local Network Agent v2.4.0`nControl total de tu red local", "Acerca de") })
+$ayudaMenu.DropDownItems.Add($aboutItem) | Out-Null
+
+$menuStrip.Items.Add($archivoMenu) | Out-Null
+$menuStrip.Items.Add($herramientasMenu) | Out-Null
+$menuStrip.Items.Add($ayudaMenu) | Out-Null
+
+$form.Controls.Add($menuStrip)
+
+# ─── Header Title ────────────────────────────────────────────────────────────
 $lblTitle = New-Object System.Windows.Forms.Label
 $lblTitle.Text = "LOCAL NETWORK AGENT"
-$lblTitle.Font = New-Object System.Drawing.Font("Segoe UI", 16, [System.Drawing.FontStyle]::Bold)
-$lblTitle.ForeColor = [System.Drawing.Color]::FromArgb(0, 217, 255)
-$lblTitle.Location = New-Object System.Drawing.Point(20, 15)
+$lblTitle.Font = New-Object System.Drawing.Font("Segoe UI", 26, [System.Drawing.FontStyle]::Bold)
+$lblTitle.ForeColor = $neonCyan
+$lblTitle.Location = New-Object System.Drawing.Point(20, 35)
 $lblTitle.AutoSize = $true
-$global:titlePanel.Controls.Add($lblTitle)
+$form.Controls.Add($lblTitle)
 
-$btnScan = New-Object System.Windows.Forms.Button
-$btnScan.Text = "ESCANEAR RED"
-$btnScan.Location = New-Object System.Drawing.Point(850, 15)
-$btnScan.Size = New-Object System.Drawing.Size(120, 35)
-$btnScan.FlatStyle = "Flat"
-$btnScan.FlatAppearance.BorderSize = 0
-$btnScan.BackColor = [System.Drawing.Color]::FromArgb(0, 200, 83)
-$btnScan.ForeColor = [System.Drawing.Color]::White
-$btnScan.Add_Click({ Start-NetworkScan })
-$global:titlePanel.Controls.Add($btnScan)
+$lblVersion = New-Object System.Windows.Forms.Label
+$lblVersion.Text = "v2.4.0"
+$lblVersion.Font = New-Object System.Drawing.Font("Segoe UI", 9)
+$lblVersion.ForeColor = $textDim
+$lblVersion.Location = New-Object System.Drawing.Point(25, 75)
+$lblVersion.AutoSize = $true
+$form.Controls.Add($lblVersion)
 
-$form.Controls.Add($global:titlePanel)
+$btnScan = New-CyberButton -Text "ESCANEAR RED" -X 1050 -Y 40 -W 150 -H 40 -Color $neonGreen -Action { Start-NetworkScan }
+$form.Controls.Add($btnScan)
 
-$global:leftPanel = New-Object System.Windows.Forms.Panel
-$global:leftPanel.Location = New-Object System.Drawing.Point(10, 70)
-$global:leftPanel.Size = New-Object System.Drawing.Size(300, 570)
-$global:leftPanel.BackColor = [System.Drawing.Color]::FromArgb(35, 35, 50)
-$global:leftPanel.BorderStyle = "FixedSingle"
+$global:lblStatus = New-Object System.Windows.Forms.Label
+$global:lblStatus.Text = "[ Presione ESCANEAR ]"
+$global:lblStatus.Font = New-Object System.Drawing.Font("Segoe UI", 9)
+$global:lblStatus.ForeColor = $textDim
+$global:lblStatus.Location = New-Object System.Drawing.Point(1050, 85)
+$global:lblStatus.AutoSize = $true
+$form.Controls.Add($global:lblStatus)
+
+# ─── Separator line ─────────────────────────────────────────────────────────
+$sepLine = New-Object System.Windows.Forms.Panel
+$sepLine.Location = New-Object System.Drawing.Point(15, 105)
+$sepLine.Size = New-Object System.Drawing.Size(1260, 2)
+$sepLine.BackColor = [System.Drawing.Color]::FromArgb(60, 60, 80)
+$form.Controls.Add($sepLine)
+
+# ─── Left Panel - Device List ───────────────────────────────────────────────
+$leftPanel = New-Object System.Windows.Forms.Panel
+$leftPanel.Location = New-Object System.Drawing.Point(15, 115)
+$leftPanel.Size = New-Object System.Drawing.Size(350, 620)
+$leftPanel.BackColor = $medium
+$leftPanel.BorderStyle = "FixedSingle"
+$form.Controls.Add($leftPanel)
 
 $lblDevices = New-Object System.Windows.Forms.Label
 $lblDevices.Text = "DISPOSITIVOS EN RED"
 $lblDevices.Font = New-Object System.Drawing.Font("Segoe UI", 11, [System.Drawing.FontStyle]::Bold)
-$lblDevices.ForeColor = [System.Drawing.Color]::Cyan
-$lblDevices.Location = New-Object System.Drawing.Point(10, 10)
+$lblDevices.ForeColor = $neonCyan
+$lblDevices.Location = New-Object System.Drawing.Point(12, 12)
 $lblDevices.AutoSize = $true
-$global:leftPanel.Controls.Add($lblDevices)
-
-$lblStatus = New-Object System.Windows.Forms.Label
-$lblStatus.Text = "Clique en Escanear para buscar"
-$lblStatus.Font = New-Object System.Drawing.Font("Segoe UI", 8)
-$lblStatus.ForeColor = [System.Drawing.Color]::Silver
-$lblStatus.Location = New-Object System.Drawing.Point(10, 35)
-$lblStatus.AutoSize = $true
-$global:leftPanel.Controls.Add($lblStatus)
+$leftPanel.Controls.Add($lblDevices)
 
 $global:deviceList = New-Object System.Windows.Forms.ListView
-$global:deviceList.Location = New-Object System.Drawing.Point(10, 60)
-$global:deviceList.Size = New-Object System.Drawing.Size(280, 500)
-$global:deviceList.BackColor = [System.Drawing.Color]::FromArgb(25, 25, 40)
-$global:deviceList.ForeColor = [System.Drawing.Color]::White
+$global:deviceList.Location = New-Object System.Drawing.Point(12, 40)
+$global:deviceList.Size = New-Object System.Drawing.Size(322, 560)
+$global:deviceList.BackColor = [System.Drawing.Color]::FromArgb(5, 5, 15)
+$global:deviceList.ForeColor = $textBright
 $global:deviceList.FullRowSelect = $true
 $global:deviceList.View = "Details"
-$global:deviceList.Columns.Add("Nombre", 130)
-$global:deviceList.Columns.Add("IP", 80)
-$global:deviceList.Columns.Add("Estado", 50)
+$global:deviceList.GridLines = $false
+$global:deviceList.HideSelection = $false
+$global:deviceList.BorderStyle = "None"
+
+$null = $global:deviceList.Columns.Add("NOMBRE", 150)
+$null = $global:deviceList.Columns.Add("IP", 90)
+$null = $global:deviceList.Columns.Add("ESTADO", 60)
+
 $global:deviceList.Add_DoubleClick({ Show-DeviceInfo })
-$global:leftPanel.Controls.Add($global:deviceList)
+$global:deviceList.Add_SelectedIndexChanged({
+    if ($global:deviceList.SelectedItems.Count -gt 0) {
+        $global:selectedDevice = $global:deviceList.SelectedItems[0].Tag
+        Show-DeviceInfo
+    }
+})
 
-$form.Controls.Add($global:leftPanel)
+# Context menu (right-click)
+$contextMenu = New-Object System.Windows.Forms.ContextMenuStrip
+$contextMenu.BackColor = $darkest
+$contextMenu.ForeColor = $textBright
 
-$global:rightPanel = New-Object System.Windows.Forms.Panel
-$global:rightPanel.Location = New-Object System.Drawing.Point(320, 70)
-$global:rightPanel.Size = New-Object System.Drawing.Size(770, 570)
-$global:rightPanel.BackColor = [System.Drawing.Color]::FromArgb(30, 30, 46)
+$ctxShell = New-Object System.Windows.Forms.ToolStripMenuItem
+$ctxShell.Text = "Shell remoto"
+$ctxShell.Add_Click({ Open-Shell })
+$contextMenu.Items.Add($ctxShell) | Out-Null
 
-$global:infoPanel = New-Object System.Windows.Forms.Panel
-$global:infoPanel.Location = New-Object System.Drawing.Point(0, 0)
-$global:infoPanel.Size = New-Object System.Drawing.Size(770, 180)
-$global:infoPanel.BackColor = [System.Drawing.Color]::FromArgb(40, 40, 55)
-$global:infoPanel.BorderStyle = "FixedSingle"
+$ctxFiles = New-Object System.Windows.Forms.ToolStripMenuItem
+$ctxFiles.Text = "Explorar archivos"
+$ctxFiles.Add_Click({ Open-Files })
+$contextMenu.Items.Add($ctxFiles) | Out-Null
+
+$ctxWoL = New-Object System.Windows.Forms.ToolStripMenuItem
+$ctxWoL.Text = "Wake-on-LAN"
+$ctxWoL.Add_Click({ Send-WoL })
+$contextMenu.Items.Add($ctxWoL) | Out-Null
+
+$ctxForce = New-Object System.Windows.Forms.ToolStripMenuItem
+$ctxForce.Text = "Forzar deteccion"
+$ctxForce.Add_Click({ Force-Detect })
+$contextMenu.Items.Add($ctxForce) | Out-Null
+
+$global:deviceList.ContextMenuStrip = $contextMenu
+$leftPanel.Controls.Add($global:deviceList)
+
+# ─── Right Panel - Info & Actions ───────────────────────────────────────────
+$rightPanel = New-Object System.Windows.Forms.Panel
+$rightPanel.Location = New-Object System.Drawing.Point(380, 115)
+$rightPanel.Size = New-Object System.Drawing.Size(900, 620)
+$rightPanel.BackColor = $medium
+$rightPanel.BorderStyle = "FixedSingle"
+$form.Controls.Add($rightPanel)
+
+# ─ Info Banner ─
+$infoHeader = New-Object System.Windows.Forms.Panel
+$infoHeader.Location = New-Object System.Drawing.Point(0, 0)
+$infoHeader.Size = New-Object System.Drawing.Size(898, 30)
+$infoHeader.BackColor = [System.Drawing.Color]::FromArgb(30, 30, 55)
+$rightPanel.Controls.Add($infoHeader)
 
 $lblInfoTitle = New-Object System.Windows.Forms.Label
 $lblInfoTitle.Text = "INFORMACION DEL DISPOSITIVO"
-$lblInfoTitle.Font = New-Object System.Drawing.Font("Segoe UI", 11, [System.Drawing.FontStyle]::Bold)
-$lblInfoTitle.ForeColor = [System.Drawing.Color]::FromArgb(0, 217, 255)
-$lblInfoTitle.Location = New-Object System.Drawing.Point(10, 10)
+$lblInfoTitle.Font = New-Object System.Drawing.Font("Segoe UI", 10, [System.Drawing.FontStyle]::Bold)
+$lblInfoTitle.ForeColor = $neonMagenta
+$lblInfoTitle.Location = New-Object System.Drawing.Point(15, 6)
 $lblInfoTitle.AutoSize = $true
-$global:infoPanel.Controls.Add($lblInfoTitle)
+$infoHeader.Controls.Add($lblInfoTitle)
 
-$global:lblInfo = New-Object System.Windows.Forms.Label
-$global:lblInfo.Text = "Seleccione un dispositivo de la lista"
-$global:lblInfo.Font = New-Object System.Drawing.Font("Consolas", 9)
-$global:lblInfo.ForeColor = [System.Drawing.Color]::Silver
-$global:lblInfo.Location = New-Object System.Drawing.Point(10, 40)
-$global:lblInfo.Size = New-Object System.Drawing.Size(750, 130)
-$global:infoPanel.Controls.Add($global:lblInfo)
+$global:txtInfo = New-Object System.Windows.Forms.RichTextBox
+$global:txtInfo.Location = New-Object System.Drawing.Point(15, 40)
+$global:txtInfo.Size = New-Object System.Drawing.Size(870, 260)
+$global:txtInfo.Font = New-Object System.Drawing.Font("Cascadia Code", 10)
+$global:txtInfo.ForeColor = $textDim
+$global:txtInfo.BackColor = [System.Drawing.Color]::FromArgb(5, 5, 15)
+$global:txtInfo.ReadOnly = $true
+$global:txtInfo.BorderStyle = "None"
+$global:txtInfo.ScrollBars = "Vertical"
+$rightPanel.Controls.Add($global:txtInfo)
 
-$global:rightPanel.Controls.Add($global:infoPanel)
-
-$global:actionPanel = New-Object System.Windows.Forms.Panel
-$global:actionPanel.Location = New-Object System.Drawing.Point(0, 190)
-$global:actionPanel.Size = New-Object System.Drawing.Size(770, 70)
-$global:actionPanel.BackColor = [System.Drawing.Color]::FromArgb(40, 40, 55)
-$global:actionPanel.BorderStyle = "FixedSingle"
+# ─ Actions ─
+$actionHeader = New-Object System.Windows.Forms.Panel
+$actionHeader.Location = New-Object System.Drawing.Point(0, 310)
+$actionHeader.Size = New-Object System.Drawing.Size(898, 30)
+$actionHeader.BackColor = [System.Drawing.Color]::FromArgb(30, 30, 55)
+$rightPanel.Controls.Add($actionHeader)
 
 $lblActions = New-Object System.Windows.Forms.Label
 $lblActions.Text = "ACCIONES"
 $lblActions.Font = New-Object System.Drawing.Font("Segoe UI", 10, [System.Drawing.FontStyle]::Bold)
-$lblActions.ForeColor = [System.Drawing.Color]::Cyan
-$lblActions.Location = New-Object System.Drawing.Point(10, 8)
+$lblActions.ForeColor = $neonCyan
+$lblActions.Location = New-Object System.Drawing.Point(15, 6)
 $lblActions.AutoSize = $true
-$global:actionPanel.Controls.Add($lblActions)
+$actionHeader.Controls.Add($lblActions)
 
-$btnFiles = New-Object System.Windows.Forms.Button
-$btnFiles.Text = "ARCHIVOS"
-$btnFiles.Location = New-Object System.Drawing.Point(10, 32)
-$btnFiles.Size = New-Object System.Drawing.Size(90, 30)
-$btnFiles.FlatStyle = "Flat"
-$btnFiles.FlatAppearance.BorderSize = 0
-$btnFiles.BackColor = [System.Drawing.Color]::FromArgb(255, 184, 108)
-$btnFiles.ForeColor = [System.Drawing.Color]::Black
-$btnFiles.Add_Click({ Open-Files })
-$global:actionPanel.Controls.Add($btnFiles)
+$actionPanel = New-Object System.Windows.Forms.Panel
+$actionPanel.Location = New-Object System.Drawing.Point(15, 345)
+$actionPanel.Size = New-Object System.Drawing.Size(870, 60)
+$actionPanel.BackColor = $dark
+$rightPanel.Controls.Add($actionPanel)
 
-$btnShell = New-Object System.Windows.Forms.Button
-$btnShell.Text = "SHELL"
-$btnShell.Location = New-Object System.Drawing.Point(110, 32)
-$btnShell.Size = New-Object System.Drawing.Size(90, 30)
-$btnShell.FlatStyle = "Flat"
-$btnShell.FlatAppearance.BorderSize = 0
-$btnShell.BackColor = [System.Drawing.Color]::FromArgb(255, 121, 198)
-$btnShell.ForeColor = [System.Drawing.Color]::Black
-$btnShell.Add_Click({ Open-Shell })
-$global:actionPanel.Controls.Add($btnShell)
+$actionPanel.Controls.Add((New-CyberButton -Text "ARCHIVOS" -X 10 -Y 10 -W 120 -H 40 -Color $neonOrange -Action { Open-Files }))
+$actionPanel.Controls.Add((New-CyberButton -Text "SHELL" -X 145 -Y 10 -W 100 -H 40 -Color ([System.Drawing.Color]::FromArgb(255, 80, 200)) -Action { Open-Shell }))
+$actionPanel.Controls.Add((New-CyberButton -Text "WOL" -X 260 -Y 10 -W 80 -H 40 -Color $neonGreen -Action { Send-WoL }))
+$actionPanel.Controls.Add((New-CyberButton -Text "VOZ" -X 355 -Y 10 -W 80 -H 40 -Color $neonOrange -Action { Open-Voice }))
+$actionPanel.Controls.Add((New-CyberButton -Text "CHAT" -X 450 -Y 10 -W 80 -H 40 -Color $neonBlue -Action { Open-Intercom }))
+$actionPanel.Controls.Add((New-CyberButton -Text "MONITOR" -X 545 -Y 10 -W 100 -H 40 -Color ([System.Drawing.Color]::FromArgb(0, 210, 190)) -Action { Open-Monitor }))
 
-$btnWoL = New-Object System.Windows.Forms.Button
-$btnWoL.Text = "WOL"
-$btnWoL.Location = New-Object System.Drawing.Point(210, 32)
-$btnWoL.Size = New-Object System.Drawing.Size(90, 30)
-$btnWoL.FlatStyle = "Flat"
-$btnWoL.FlatAppearance.BorderSize = 0
-$btnWoL.BackColor = [System.Drawing.Color]::FromArgb(0, 200, 83)
-$btnWoL.ForeColor = [System.Drawing.Color]::White
-$btnWoL.Add_Click({ Send-WoL })
-$global:actionPanel.Controls.Add($btnWoL)
+# ─ API Server ─
+$apiHeader = New-Object System.Windows.Forms.Panel
+$apiHeader.Location = New-Object System.Drawing.Point(0, 415)
+$apiHeader.Size = New-Object System.Drawing.Size(898, 30)
+$apiHeader.BackColor = [System.Drawing.Color]::FromArgb(30, 30, 55)
+$rightPanel.Controls.Add($apiHeader)
 
-$btnSpeak = New-Object System.Windows.Forms.Button
-$btnSpeak.Text = "VOZ"
-$btnSpeak.Location = New-Object System.Drawing.Point(310, 32)
-$btnSpeak.Size = New-Object System.Drawing.Size(90, 30)
-$btnSpeak.FlatStyle = "Flat"
-$btnSpeak.FlatAppearance.BorderSize = 0
-$btnSpeak.BackColor = [System.Drawing.Color]::FromArgb(255, 87, 34)
-$btnSpeak.ForeColor = [System.Drawing.Color]::White
-$btnSpeak.Add_Click({ Open-Voice })
-$global:actionPanel.Controls.Add($btnSpeak)
+$lblApiTitle = New-Object System.Windows.Forms.Label
+$lblApiTitle.Text = "API SERVER"
+$lblApiTitle.Font = New-Object System.Drawing.Font("Segoe UI", 10, [System.Drawing.FontStyle]::Bold)
+$lblApiTitle.ForeColor = $neonCyan
+$lblApiTitle.Location = New-Object System.Drawing.Point(15, 6)
+$lblApiTitle.AutoSize = $true
+$apiHeader.Controls.Add($lblApiTitle)
 
-$btnIntercom = New-Object System.Windows.Forms.Button
-$btnIntercom.Text = "CHAT"
-$btnIntercom.Location = New-Object System.Drawing.Point(410, 32)
-$btnIntercom.Size = New-Object System.Drawing.Size(90, 30)
-$btnIntercom.FlatStyle = "Flat"
-$btnIntercom.FlatAppearance.BorderSize = 0
-$btnIntercom.BackColor = [System.Drawing.Color]::FromArgb(74, 42, 193)
-$btnIntercom.ForeColor = [System.Drawing.Color]::White
-$btnIntercom.Add_Click({ Open-Intercom })
-$global:actionPanel.Controls.Add($btnIntercom)
+$apiPanel = New-Object System.Windows.Forms.Panel
+$apiPanel.Location = New-Object System.Drawing.Point(15, 450)
+$apiPanel.Size = New-Object System.Drawing.Size(870, 160)
+$apiPanel.BackColor = $dark
+$rightPanel.Controls.Add($apiPanel)
 
-$global:rightPanel.Controls.Add($global:actionPanel)
-
-$global:apiPanel = New-Object System.Windows.Forms.Panel
-$global:apiPanel.Location = New-Object System.Drawing.Point(0, 270)
-$global:apiPanel.Size = New-Object System.Drawing.Size(770, 290)
-$global:apiPanel.BackColor = [System.Drawing.Color]::FromArgb(40, 40, 55)
-$global:apiPanel.BorderStyle = "FixedSingle"
-
-$lblApi = New-Object System.Windows.Forms.Label
-$lblApi.Text = "API SERVER"
-$lblApi.Font = New-Object System.Drawing.Font("Segoe UI", 10, [System.Drawing.FontStyle]::Bold)
-$lblApi.ForeColor = [System.Drawing.Color]::Cyan
-$lblApi.Location = New-Object System.Drawing.Point(10, 8)
-$lblApi.AutoSize = $true
-$global:apiPanel.Controls.Add($lblApi)
-
-$btnApi = New-Object System.Windows.Forms.Button
-$btnApi.Text = "INICIAR API"
-$btnApi.Location = New-Object System.Drawing.Point(10, 32)
-$btnApi.Size = New-Object System.Drawing.Size(100, 30)
-$btnApi.FlatStyle = "Flat"
-$btnApi.FlatAppearance.BorderSize = 0
-$btnApi.BackColor = [System.Drawing.Color]::FromArgb(15, 52, 96)
-$btnApi.ForeColor = [System.Drawing.Color]::White
-$btnApi.Add_Click({ Toggle-Api })
-$global:apiPanel.Controls.Add($btnApi)
+$global:btnApi = New-CyberButton -Text "INICIAR" -X 10 -Y 10 -W 120 -H 35 -Color $neonBlue -Action { Toggle-Api }
+$apiPanel.Controls.Add($global:btnApi)
 
 $global:lblApiStatus = New-Object System.Windows.Forms.Label
-$global:lblApiStatus.Text = "API: Detenida"
-$global:lblApiStatus.Font = New-Object System.Drawing.Font("Consolas", 8)
-$global:lblApiStatus.ForeColor = [System.Drawing.Color]::Silver
-$global:lblApiStatus.Location = New-Object System.Drawing.Point(120, 38)
+$global:lblApiStatus.Text = "Detenido"
+$global:lblApiStatus.Font = New-Object System.Drawing.Font("Segoe UI", 10)
+$global:lblApiStatus.ForeColor = [System.Drawing.Color]::Gray
+$global:lblApiStatus.Location = New-Object System.Drawing.Point(140, 18)
 $global:lblApiStatus.AutoSize = $true
-$global:apiPanel.Controls.Add($global:lblApiStatus)
+$apiPanel.Controls.Add($global:lblApiStatus)
 
 $global:txtLog = New-Object System.Windows.Forms.TextBox
-$global:txtLog.Location = New-Object System.Drawing.Point(10, 70)
-$global:txtLog.Size = New-Object System.Drawing.Size(750, 210)
+$global:txtLog.Location = New-Object System.Drawing.Point(10, 55)
+$global:txtLog.Size = New-Object System.Drawing.Size(850, 95)
 $global:txtLog.Multiline = $true
-$global:txtLog.BackColor = [System.Drawing.Color]::FromArgb(20, 20, 30)
-$global:txtLog.ForeColor = [System.Drawing.Color]::Lime
-$global:txtLog.Font = New-Object System.Drawing.Font("Consolas", 8)
+$global:txtLog.BackColor = [System.Drawing.Color]::FromArgb(3, 3, 10)
+$global:txtLog.ForeColor = $neonGreen
+$global:txtLog.Font = New-Object System.Drawing.Font("Cascadia Code", 9)
 $global:txtLog.ReadOnly = $true
+$global:txtLog.BorderStyle = "None"
 $global:txtLog.ScrollBars = "Vertical"
-$global:apiPanel.Controls.Add($global:txtLog)
+$apiPanel.Controls.Add($global:txtLog)
 
-$global:rightPanel.Controls.Add($global:apiPanel)
+# ─── Status Bar ──────────────────────────────────────────────────────────────
+$statusBar = New-Object System.Windows.Forms.StatusStrip
+$statusBar.BackColor = $darkest
+$statusBar.ForeColor = $textDim
+$statusBar.Font = New-Object System.Drawing.Font("Segoe UI", 9)
 
-$form.Controls.Add($global:rightPanel)
+$statusLabel = New-Object System.Windows.Forms.ToolStripStatusLabel
+$statusLabel.Text = "Listo"
+$statusLabel.ForeColor = $textDim
+$statusBar.Items.Add($statusLabel) | Out-Null
 
+$statusTime = New-Object System.Windows.Forms.ToolStripStatusLabel
+$statusTime.Text = ""
+$statusTime.ForeColor = $textDim
+$statusTime.Alignment = "Right"
+$statusBar.Items.Add($statusTime) | Out-Null
+
+$form.Controls.Add($statusBar)
+
+# Update clock
+$clockTimer = New-Object System.Windows.Forms.Timer
+$clockTimer.Interval = 1000
+$clockTimer.Add_Tick({ $statusTime.Text = Get-Date -Format "HH:mm:ss  dd/MM/yyyy" })
+$clockTimer.Start()
+
+# ─── Global Vars ─────────────────────────────────────────────────────────────
+$global:apiProcess = $null
+$global:apiTimer = $null
+
+# ─── Functions ────────────────────────────────────────────────────────────────
 function Start-NetworkScan {
     if ($global:scanning) { return }
     $global:scanning = $true
-    
-    $lblStatus.Text = "Buscando..."
+    $global:lblStatus.Text = "[ Escaneando... ]"
     $global:deviceList.Items.Clear()
     $btnScan.Enabled = $false
+    [System.Windows.Forms.Application]::DoEvents()
     
     if (-not $global:config) {
-        $lblStatus.Text = "Error config"
-        $btnScan.Enabled = $true
-        $global:scanning = $false
+        $global:lblStatus.Text = "[ Error: config no cargada ]"
+        $btnScan.Enabled = $true; $global:scanning = $false; return
+    }
+    
+    $subnet = $global:config.SubnetPrefix
+    
+    # STEP 1: Ping ALL 30 IPs to force ARP table refresh
+    $global:lblStatus.Text = "[ Ping sweep... ]"
+    [System.Windows.Forms.Application]::DoEvents()
+    1..30 | ForEach-Object {
+        try { [System.Net.NetworkInformation.Ping]::new().Send("$subnet.$_", 80) | Out-Null } catch {}
+    }
+    
+    # STEP 2: Read fresh ARP table
+    $arpTable = Get-NetNeighbor | Where-Object {
+        $_.IPAddress -match "^$([regex]::Escape($subnet))\." -and
+        $_.LinkLayerAddress -and $_.LinkLayerAddress -ne "00-00-00-00-00-00" -and
+        $_.State -eq "Reachable"
+    }
+    
+    $macToIp = @{}
+    foreach ($entry in $arpTable) {
+        $mac = $entry.LinkLayerAddress.ToLower() -replace "-", ":"
+        $macToIp[$mac] = $entry.IPAddress
+    }
+    
+    # STEP 3: Check each device
+    $changed = $false
+    $online = 0; $offline = 0
+    
+    foreach ($pc in $global:config.Computers) {
+        $name = $pc.Name; $cfgIp = $pc.IP; $isPhone = ($pc.Type -eq "phone")
+        $pcMac = if ($pc.MAC) { $pc.MAC.ToLower() } else { $null }
+        
+        # Resolve actual IP: MAC → ARP → fallback
+        $actualIp = $null
+        if ($pcMac -and $macToIp.ContainsKey($pcMac)) { $actualIp = $macToIp[$pcMac] }
+        if (-not $actualIp -and $name -eq "CORE0") {
+            $cm = ($global:config.Core0MAC -replace "-", ":").ToLower()
+            if ($macToIp.ContainsKey($cm)) { $actualIp = $macToIp[$cm] }
+        }
+        if (-not $actualIp -and $global:config.KnownMacs) {
+            foreach ($km in $global:config.KnownMacs.PSObject.Properties) {
+                if ($km.Value -eq $name) {
+                    $k = $km.Name.ToLower()
+                    if ($macToIp.ContainsKey($k)) { $actualIp = $macToIp[$k]; break }
+                }
+            }
+        }
+        if (-not $actualIp) { $actualIp = $cfgIp }
+        
+        # Auto-update config
+        if ($actualIp -ne $cfgIp) { $pc.IP = $actualIp; $changed = $true }
+        
+        # Online check: ping + TCP fallback
+        $isOnline = $false; $viaTcp = $false
+        try { $r = [System.Net.NetworkInformation.Ping]::new().Send($actualIp, 300); if ($r.Status -eq "Success") { $isOnline = $true } } catch {}
+        [System.Windows.Forms.Application]::DoEvents()
+        
+        if (-not $isOnline) {
+            $port = if ($isPhone) { 5555 } else { 5985 }
+            try {
+                $t = New-Object System.Net.Sockets.TcpClient
+                $c = $t.BeginConnect($actualIp, $port, $null, $null)
+                if ($c.AsyncWaitHandle.WaitOne(300)) { $isOnline = $true; $viaTcp = $true; $t.EndConnect($c) }
+                $t.Close()
+            } catch {}
+            [System.Windows.Forms.Application]::DoEvents()
+        }
+        
+        # Render
+        $st = if ($isOnline) { "Conectado" } else { "Offline" }
+        if ($isOnline) {
+            $clr = if ($viaTcp) { [System.Drawing.Color]::FromArgb(100, 200, 255) } else { $neonGreen }
+        } else { $clr = [System.Drawing.Color]::FromArgb(120, 120, 140) }
+        
+        $it = New-Object System.Windows.Forms.ListViewItem($name)
+        $it.SubItems.Add($actualIp) | Out-Null
+        $it.SubItems.Add($st) | Out-Null
+        $it.Tag = @{ IP = $actualIp; Host = $name; Status = $st; Phone = $isPhone }
+        $it.ForeColor = $clr
+        $global:deviceList.Items.Add($it) | Out-Null
+        if ($isOnline) { $online++ } else { $offline++ }
+    }
+    
+    # Save config if IPs changed (already updated in-memory above)
+    if ($changed) {
+        $global:config | ConvertTo-Json -Depth 10 | Set-Content $configPath -Encoding UTF8
+        $global:lblStatus.Text = "Online: $online | Offline: $offline [IPs actualizadas]"
+    } else {
+        $global:lblStatus.Text = "Online: $online | Offline: $offline"
+    }
+    
+    $btnScan.Enabled = $true
+    $global:scanning = $false
+}
+
+# ─── Force detection for a single device ─────────────────────────────────────
+function Force-Detect {
+    if (-not $global:selectedDevice) { [System.Windows.Forms.MessageBox]::Show("Seleccione un dispositivo"); return }
+    $hostname = $global:selectedDevice.Host
+    $ip = $global:selectedDevice.IP
+    [System.Windows.Forms.Application]::DoEvents()
+    
+    # Ping sweep to refresh ARP
+    $subnet = $global:config.SubnetPrefix
+    1..30 | ForEach-Object { try { [System.Net.NetworkInformation.Ping]::new().Send("$subnet.$_", 80) | Out-Null } catch {} }
+    [System.Windows.Forms.Application]::DoEvents()
+    
+    # Search for this device's MAC in ARP
+    $foundIp = $null
+    $pcCfg = $global:config.Computers | Where-Object { $_.Name -eq $hostname }
+    $devMac = $null
+    if ($pcCfg -and $pcCfg.MAC) { $devMac = $pcCfg.MAC.ToLower() }
+    if (-not $devMac -and $hostname -eq "CORE0") { $devMac = ($global:config.Core0MAC -replace "-", ":").ToLower() }
+    
+    if ($devMac) {
+        $arpEntry = Get-NetNeighbor | Where-Object {
+            $_.IPAddress -match "^$([regex]::Escape($subnet))\." -and
+            ($_.LinkLayerAddress.ToLower() -replace "-", ":") -eq $devMac -and
+            $_.LinkLayerAddress -ne "00-00-00-00-00-00"
+        }
+        if ($arpEntry) { $foundIp = $arpEntry[0].IPAddress }
+    }
+    
+    if ($foundIp) {
+        # Update config
+        $global:lblStatus.Text = "[ $hostname detectado en $foundIp ]"
+        if ($pcCfg) { $pcCfg.IP = $foundIp }
+        $global:config | ConvertTo-Json -Depth 10 | Set-Content $configPath -Encoding UTF8
+        $global:config = Get-Content $configPath -Raw | ConvertFrom-Json
+        Start-NetworkScan
         return
     }
     
-    $ips = @()
-    $global:config.Computers | ForEach-Object { if ($_.IP) { $ips += $_.IP } }
-    
-    $lblStatus.Text = "Revisando $($ips.Count) equipos..."
-    
-    $results = @()
-    foreach ($ip in $ips) {
+    # Try TCP ping to the configured IP directly
+    $isOnline = $false
+    try { $r = [System.Net.NetworkInformation.Ping]::new().Send($ip, 500); if ($r.Status -eq "Success") { $isOnline = $true } } catch {}
+    if (-not $isOnline) {
+        $port = if ($global:selectedDevice.Phone) { 5555 } else { 5985 }
         try {
-            $p = New-Object System.Net.NetworkInformation.Ping
-            $r = $p.Send($ip, 300)
-            if ($r.Status -eq "Success") {
-                $name = $ip
-                try { $name = ([System.Net.Dns]::GetHostEntry($ip)).HostName } catch {}
-                $results += @{ IP = $ip; Host = $name; Status = "Online" }
-            }
-            $p.Dispose()
+            $t = New-Object System.Net.Sockets.TcpClient
+            $c = $t.BeginConnect($ip, $port, $null, $null)
+            if ($c.AsyncWaitHandle.WaitOne(500)) { $isOnline = $true; $viaTcp = $true; $t.EndConnect($c) }
+            $t.Close()
         } catch {}
     }
     
-    foreach ($res in $results) {
-        $it = New-Object System.Windows.Forms.ListViewItem($res.Host)
-        $it.SubItems.Add($res.IP) | Out-Null
-        $it.SubItems.Add($res.Status) | Out-Null
-        $it.Tag = $res
-        $it.ForeColor = [System.Drawing.Color]::Lime
-        $global:deviceList.Items.Add($it)
+    if ($isOnline) {
+        $global:lblStatus.Text = "[ $hostname responde en $ip ]"
+    } else {
+        [System.Windows.Forms.MessageBox]::Show("$hostname no responde en $ip`nMAC: $devMac`nARP: No encontrada`nVerificar conexion fisica", "Deteccion fallida")
+        $global:lblStatus.Text = "[ $hostname no detectado ]"
     }
-    
-    $lblStatus.Text = "Encontrados: $($results.Count)"
-    $btnScan.Enabled = $true
-    $global:scanning = $false
+    Start-NetworkScan
 }
 
 function Show-DeviceInfo {
     if ($global:deviceList.SelectedItems.Count -eq 0) { return }
     $item = $global:deviceList.SelectedItems[0]
     $global:selectedDevice = $item.Tag
+    $ip = $global:selectedDevice.IP
+    $hostname = $global:selectedDevice.Host
+    $status = $global:selectedDevice.Status
     
-    $info = "DISPOSITIVO: $($global:selectedDevice.Hostname)`n"
-    $info += "IP: $($global:selectedDevice.IP)`n"
-    $info += "ESTADO: $($global:selectedDevice.Status)`n`n"
-    $info += "--- ACCIONES ---`n"
-    $info += "Archivos: Navegar archivos`n"
-    $info += "Shell: Consola remota`n"
-    $info += "WoL: Encender equipo`n"
-    $info += "Voz: Mensaje de voz`n"
-    $info += "Chat: Chat en tiempo real"
+    # Get MAC info from ARP
+    $arpMatch = Get-NetNeighbor | Where-Object { $_.IPAddress -eq $ip -and $_.LinkLayerAddress -and $_.LinkLayerAddress -ne "00-00-00-00-00-00" }
+    $macStr = if ($arpMatch) { $arpMatch[0].LinkLayerAddress.ToLower() -replace "-", ":" } else { "No encontrada en ARP" }
     
-    $global:lblInfo.Text = $info
+    # Config vs actual IP
+    $pcCfg = $global:config.Computers | Where-Object { $_.Name -eq $hostname }
+    $cfgIp = if ($pcCfg) { $pcCfg.IP } else { "-" }
+    $ipMismatch = if ($cfgIp -ne $ip -and $cfgIp -ne "-") { " <<< DIFERENTE!" } else { "" }
+    
+    $info = "+" + ("=" * 50) + "+`n"
+    $info += "|  " + $hostname.PadRight(46) + " |`n"
+    $info += "+" + ("=" * 50) + "+`n"
+    $info += "|  IP actual:   " + $ip.PadRight(34) + " |`n"
+    $info += "|  IP config:   " + ($cfgIp + $ipMismatch).PadRight(34) + " |`n"
+    $info += "|  MAC:         " + $macStr.PadRight(34) + " |`n"
+    $info += "|  Estado:      " + $status.PadRight(34) + " |`n"
+    
+    if ($pcCfg) {
+        if ($pcCfg.OS) { $info += "|  SO:          " + ([string]$pcCfg.OS).PadRight(34) + " |`n" }
+        if ($pcCfg.OpenPorts) { $info += "|  Puertos:     " + ([string]$pcCfg.OpenPorts).PadRight(34) + " |`n" }
+    }
+    
+    $info += "+" + ("=" * 50) + "+`n"
+    $info += "|  ACCIONES DISPONIBLES:" + (" " * 31) + " |`n"
+    $info += "|  [1] Shell remoto" + (" " * 34) + " |`n"
+    $info += "|  [2] Explorar archivos" + (" " * 31) + " |`n"
+    $info += "|  [3] Wake-on-LAN" + (" " * 37) + " |`n"
+    $info += "|  [4] Voz remota" + (" " * 38) + " |`n"
+    $info += "|  [5] Chat en tiempo real" + (" " * 29) + " |`n"
+    $info += "|  [6] Monitor remoto" + (" " * 35) + " |`n"
+    if ($status -eq "Offline") {
+        $info += "|" + (" " * 50) + "|`n"
+        $info += "|  [!] Offline? Prueba: Forzar deteccion (click derecho)" + " |`n"
+    }
+    $info += "+" + ("=" * 50) + "+"
+    
+    $global:txtInfo.Text = $info
 }
 
 function Open-Files {
-    if (-not $global:selectedDevice) {
-        [System.Windows.Forms.MessageBox]::Show("Seleccione un dispositivo primero", "Aviso")
+    if (-not $global:selectedDevice) { [System.Windows.Forms.MessageBox]::Show("Seleccione un dispositivo"); return }
+    $ip = $global:selectedDevice.IP
+    $name = $global:selectedDevice.Host
+    $isPhone = $global:selectedDevice.Phone
+    
+    # Router: abrir admin web (HTTPS) donde se gestiona el USB
+    if ($ip -eq "192.168.1.1" -or $name -like "*livebox*") {
+        Start-Process "https://192.168.1.1"
         return
     }
-    $ip = $global:selectedDevice.IP
-    $name = $global:selectedDevice.Hostname
-    Start-Process powershell.exe -ArgumentList "-NoExit -File `"$projectPath\Explorer_Agent.ps1`" -ComputerName $ip"
+    
+    # Phone: no hay explorador de archivos remoto
+    if ($isPhone) {
+        [System.Windows.Forms.MessageBox]::Show("No hay explorador remoto disponible para dispositivos moviles")
+        return
+    }
+    
+    Start-Process powershell.exe -ArgumentList "-WindowStyle Hidden -NoExit -ExecutionPolicy Bypass -File `"$projectPath\Explorer_Agent.ps1`" -ComputerName $ip" -WindowStyle Hidden
 }
 
 function Open-Shell {
-    if (-not $global:selectedDevice) { [Windows.Forms.MessageBox]::Show("Seleccione un dispositivo"); return }
+    if (-not $global:selectedDevice) { [System.Windows.Forms.MessageBox]::Show("Seleccione un dispositivo"); return }
     $ip = $global:selectedDevice.IP
-    Start-Process powershell.exe "-NoExit -Command `"Enter-PSSession -ComputerName $ip`""
-}
-    $ip = $global:selectedDevice.IP
-    $cred = "$projectPath\core0-cred.xml"
-    if (Test- Path $cred) {
-        $c = Import- CliXml $cred
-        Start- Process powershell.exe - ArgumentList "-NoExit","Enter- PSSession -ComputerName $ip -Credential `$c"
-    } else {
-        Start- Process powershell.exe - ArgumentList "-NoExit","Enter- PSSession -ComputerName $ip"
-    }
-}
-    $ip = $global:selectedDevice.IP
-    Start-Process powershell.exe -ArgumentList "-NoExit -File `"$projectPath\RemoteShell.PS1`" -IP $ip"
-}
-    $ip = $global:selectedDevice.IP
+    if ($ip -eq "192.168.1.14") { [System.Windows.Forms.MessageBox]::Show("Use PowerShell directo"); return }
+    
     $credFile = "$projectPath\core0-cred.xml"
     if (Test-Path $credFile) {
-        Start-Process powershell.exe -ArgumentList "-NoExit -Command `"Enter-PSSession -ComputerName $ip -Credential (Import-CliXml '$credFile')`""
+        $arg = "-NoExit -Command `"Enter-PSSession -ComputerName '$ip' -Credential (Import-Clixml '$credFile')`""
     } else {
-        Start-Process powershell.exe -ArgumentList "-NoExit -Command `"Enter-PSSession -ComputerName $ip`""
+        $arg = "-NoExit -Command `"Enter-PSSession -ComputerName '$ip'`""
     }
+    Start-Process powershell.exe -ArgumentList $arg
 }
 
 function Send-WoL {
-    if (-not $global:selectedDevice) {
-        [System.Windows.Forms.MessageBox]::Show("Seleccione un dispositivo primero", "Aviso")
-        return
-    }
-    Start-Process powershell.exe -ArgumentList "-WindowStyle Hidden -ExecutionPolicy Bypass -Command `"Import-Module '$projectPath\NetworkUtilsPublic.psm1'; Send-WakeOnLan -MACAddress (Get-Content '$projectPath\network-config.json' | ConvertFrom-Json).Core0MAC`"" -WindowStyle Hidden
-    [System.Windows.Forms.MessageBox]::Show("Paquete WoL enviado", "WoL")
+    if (-not $global:selectedDevice) { [System.Windows.Forms.MessageBox]::Show("Seleccione un dispositivo"); return }
+    $mac = (Get-Content "$projectPath\network-config.json" | ConvertFrom-Json).Core0MAC
+    Start-Process powershell.exe -ArgumentList "-WindowStyle Hidden -ExecutionPolicy Bypass -Command `"Import-Module '$projectPath\NetworkUtilsPublic.psm1'; Send-WakeOnLan -MACAddress '$mac'`"" -WindowStyle Hidden
+    [System.Windows.Forms.MessageBox]::Show("WoL enviado", "WOL")
 }
 
 function Open-Voice {
-    if (-not $global:selectedDevice) {
-        [System.Windows.Forms.MessageBox]::Show("Seleccione un dispositivo primero", "Aviso")
-        return
-    }
+    if (-not $global:selectedDevice) { [System.Windows.Forms.MessageBox]::Show("Seleccione un dispositivo"); return }
     Start-Process powershell.exe -ArgumentList "-WindowStyle Hidden -ExecutionPolicy Bypass -NoExit -File `"$projectPath\Speak-Remote.ps1`" -ComputerName $($global:selectedDevice.IP)" -WindowStyle Hidden
 }
 
 function Open-Intercom {
-    if (-not $global:selectedDevice) {
-        [System.Windows.Forms.MessageBox]::Show("Seleccione un dispositivo primero", "Aviso")
-        return
-    }
+    if (-not $global:selectedDevice) { [System.Windows.Forms.MessageBox]::Show("Seleccione un dispositivo"); return }
     Start-Process powershell.exe -ArgumentList "-WindowStyle Hidden -ExecutionPolicy Bypass -NoExit -File `"$projectPath\Intercom.ps1`" -ComputerName $($global:selectedDevice.IP)" -WindowStyle Hidden
 }
 
-$global:apiProcess = $null
+function Open-Monitor {
+    if (-not $global:selectedDevice) { [System.Windows.Forms.MessageBox]::Show("Seleccione un dispositivo"); return }
+    $ip = $global:selectedDevice.IP
+    if ($ip -eq "192.168.1.14") { [System.Windows.Forms.MessageBox]::Show("No soportado en local"); return }
+    Start-Process powershell.exe -ArgumentList "-WindowStyle Hidden -ExecutionPolicy Bypass -NoExit -File `"$projectPath\RemoteMonitor.ps1`" -ComputerName $ip" -WindowStyle Hidden
+}
 
 function Toggle-Api {
     if ($global:apiProcess -eq $null) {
         $global:apiProcess = Start-Process powershell.exe -ArgumentList "-WindowStyle Hidden -ExecutionPolicy Bypass -File `"$projectPath\API-Server.ps1`"" -WindowStyle Hidden -PassThru -RedirectStandardOutput "$projectPath\temp_api.log"
-        $btnApi.Text = "DETENER API"
-        $btnApi.BackColor = [System.Drawing.Color]::FromArgb(233, 69, 96)
-        $global:lblApiStatus.Text = "API: Ejecutando"
+        $global:btnApi.Text = "DETENER"
+        $global:btnApi.FlatAppearance.BorderColor = [System.Drawing.Color]::FromArgb(255, 80, 80)
+        $global:lblApiStatus.Text = "Ejecutando"
+        $global:lblApiStatus.ForeColor = $neonGreen
         
-        $timer = New-Object System.Windows.Forms.Timer
-        $timer.Interval = 500
-        $timer.Add_Tick({
-            if (Test-Path "$projectPath\temp_api.log") {
-                try {
+        if ($global:apiTimer) { try { $global:apiTimer.Stop(); $global:apiTimer.Dispose() } catch {} }
+        $global:apiTimer = New-Object System.Windows.Forms.Timer
+        $global:apiTimer.Interval = 500
+        $global:apiTimer.Add_Tick({
+            try {
+                if (Test-Path "$projectPath\temp_api.log") {
                     $log = Get-Content "$projectPath\temp_api.log" -Tail 3 -ErrorAction SilentlyContinue
-                    if ($log) {
-                        $global:txtLog.AppendText(($log -join "`n") + "`n")
-                    }
-                } catch {}
-            }
-            if ($global:apiProcess.HasExited) {
-                $btnApi.Text = "INICIAR API"
-                $btnApi.BackColor = [System.Drawing.Color]::FromArgb(15, 52, 96)
-                $global:lblApiStatus.Text = "API: Detenida"
-                $global:apiProcess = $null
-                $timer.Stop()
-                $timer.Dispose()
-            }
+                    if ($log -and $global:txtLog) { $global:txtLog.AppendText(($log -join "`n") + "`n") }
+                }
+                if ($global:apiProcess -ne $null -and $global:apiProcess.HasExited) {
+                    $global:btnApi.Text = "INICIAR"
+                    $global:btnApi.FlatAppearance.BorderColor = [System.Drawing.Color]::FromArgb(0, 180, 255)
+                    $global:lblApiStatus.Text = "Detenido"
+                    $global:lblApiStatus.ForeColor = [System.Drawing.Color]::Gray
+                    $global:apiProcess = $null
+                    $global:apiTimer.Stop()
+                    $global:apiTimer.Dispose()
+                    $global:apiTimer = $null
+                }
+            } catch {}
         })
-        $timer.Start()
+        $global:apiTimer.Start()
     } else {
-        $global:apiProcess.Kill()
+        try { if (-not $global:apiProcess.HasExited) { $global:apiProcess.Kill() } } catch {}
         $global:apiProcess = $null
-        $btnApi.Text = "INICIAR API"
-        $btnApi.BackColor = [System.Drawing.Color]::FromArgb(15, 52, 96)
-        $global:lblApiStatus.Text = "API: Detenida"
+        if ($global:apiTimer) { try { $global:apiTimer.Stop(); $global:apiTimer.Dispose() } catch {} }
+        $global:apiTimer = $null
+        $global:btnApi.Text = "INICIAR"
+        $global:btnApi.FlatAppearance.BorderColor = [System.Drawing.Color]::FromArgb(0, 180, 255)
+        $global:lblApiStatus.Text = "Detenido"
+        $global:lblApiStatus.ForeColor = [System.Drawing.Color]::Gray
     }
 }
 
 $form.Add_Shown({
-    Start-NetworkScan
+    try { Toggle-Api } catch {}
+    try { Start-NetworkScan } catch {}
 })
 
 if ($Minimized) {
@@ -415,8 +658,6 @@ if ($Minimized) {
 
 try {
     [System.Windows.Forms.Application]::Run($form)
-} catch {
-    Write-Host "Error: $_"
 } finally {
-    Start-Sleep -Seconds 1
+    Get-Process powershell* -EA SilentlyContinue | Where-Object { $_.Id -ne $PID } | Stop-Process -Force -EA SilentlyContinue
 }

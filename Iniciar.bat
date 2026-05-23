@@ -1,2 +1,3 @@
 @echo off
-cmd /c start "" /b powershell -WindowStyle Hidden -ExecutionPolicy Bypass -NoExit -File "%~dp0LocalNetworkAgent-GUI.ps1"
+cd /d "%~dp0"
+start /B powershell -WindowStyle Hidden -NoProfile -ExecutionPolicy Bypass -File "%~dp0LocalNetworkAgent-GUI.ps1"

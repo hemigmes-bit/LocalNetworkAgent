@@ -9,3 +9,6 @@ obj/
 .vs/
 *.exe
 *.dll
+api-token.json
+node_modules/
+clipboard_ref.png

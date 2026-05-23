@@ -31,7 +31,18 @@ function Get-ApiToken {
         $data = Get-Content $ApiTokenPath -Raw | ConvertFrom-Json
         return $data.Token
     }
-    return "AWhjR1vKIQorbqSekM6Hs307nx4cOJBp" # Default fallback
+    return "AWhjR1vKIQorbqSekM6Hs307nx4cOJBp"
+}
+
+function Read-RequestBody {
+    param([System.Net.HttpListenerRequest]$Request)
+    if ($Request.HasEntityBody) {
+        $reader = New-Object System.IO.StreamReader($Request.InputStream)
+        $body = $reader.ReadToEnd()
+        $reader.Close()
+        try { return $body | ConvertFrom-Json } catch { return $null }
+    }
+    return $null
 }
 
 function Handle-ApiRequest {
@@ -82,6 +93,110 @@ function Handle-ApiRequest {
                 } else {
                     $responseData = @{ error = "NetworkUtils module not fully loaded" } | ConvertTo-Json
                     $Response.StatusCode = 500
+                }
+            }
+
+            # WOL endpoint
+            { $_ -eq "/api/wol" -and $method -eq "POST" } {
+                $configPath = "$PSScriptRoot\network-config.json"
+                if (Test-Path $configPath) {
+                    $cfg = Get-Content $configPath -Raw | ConvertFrom-Json
+                    $mac = $cfg.Core0MAC
+                    if ($mac -and (Get-Command Send-WakeOnLan -ErrorAction SilentlyContinue)) {
+                        Send-WakeOnLan -MACAddress $mac
+                        $responseData = @{ success = $true; mac = $mac; message = "WoL packet sent" } | ConvertTo-Json
+                        $Response.StatusCode = 200
+                    } else {
+                        $responseData = @{ error = "Core0MAC not configured or NetworkUtils module missing" } | ConvertTo-Json
+                        $Response.StatusCode = 500
+                    }
+                } else {
+                    $responseData = @{ error = "network-config.json not found" } | ConvertTo-Json
+                    $Response.StatusCode = 500
+                }
+            }
+
+            # Ping endpoint
+            { $_ -eq "/api/ping" -and $method -eq "POST" } {
+                $body = Read-RequestBody -Request $Request
+                $ip = $body.ip
+                if (-not $ip) { $ip = $body.IP }
+                if ($ip) {
+                    $alive = Test-Connection -ComputerName $ip -Count 1 -Quiet -ErrorAction SilentlyContinue
+                    $responseData = @{ ip = $ip; alive = ($alive -eq $true) } | ConvertTo-Json
+                    $Response.StatusCode = 200
+                } else {
+                    $responseData = @{ error = "Missing 'ip' in request body" } | ConvertTo-Json
+                    $Response.StatusCode = 400
+                }
+            }
+
+            # Scan endpoint
+            { $_ -eq "/api/scan" -and $method -eq "POST" } {
+                $cfg = Get-Content "$PSScriptRoot\network-config.json" -Raw | ConvertFrom-Json
+                $subnet = $cfg.SubnetPrefix
+                $results = @()
+                $jobMap = @{}
+                1..20 | ForEach-Object { 
+                    $ip = "$subnet.$_"
+                    $jobMap[$ip] = Test-Connection -ComputerName $ip -Count 1 -AsJob -ErrorAction SilentlyContinue
+                }
+                $jobMap.Values | Wait-Job -Timeout 3 | Out-Null
+                foreach ($ip in $jobMap.Keys) {
+                    $r = $jobMap[$ip] | Receive-Job -ErrorAction SilentlyContinue
+                    if ($r -and $r.StatusCode -eq 0) { $results += @{ IP = $ip } }
+                    $jobMap[$ip] | Remove-Job -Force -ErrorAction SilentlyContinue
+                }
+                $responseData = @{ subnet = $subnet; online = $results.Count; devices = $results } | ConvertTo-Json
+                $Response.StatusCode = 200
+            }
+
+            # Speak endpoint
+            { $_ -eq "/api/speak" -and $method -eq "POST" } {
+                $body = Read-RequestBody -Request $Request
+                $text = $body.text
+                $ip = $body.ip
+                if ($text -and $ip) {
+                    $script = "$PSScriptRoot\Speak-Remote.ps1"
+                    if (Test-Path $script) {
+                        Start-Process powershell.exe -ArgumentList "-WindowStyle Hidden -ExecutionPolicy Bypass -File `"$script`" -ComputerName $ip -Message `"$text`"" -WindowStyle Hidden
+                        $responseData = @{ success = $true; ip = $ip; text = $text } | ConvertTo-Json
+                        $Response.StatusCode = 200
+                    } else {
+                        $responseData = @{ error = "Speak-Remote.ps1 not found" } | ConvertTo-Json
+                        $Response.StatusCode = 500
+                    }
+                } else {
+                    $responseData = @{ error = "Missing 'text' or 'ip' in request body" } | ConvertTo-Json
+                    $Response.StatusCode = 400
+                }
+            }
+
+            # Shell endpoint
+            { $_ -eq "/api/shell" -and $method -eq "POST" } {
+                $body = Read-RequestBody -Request $Request
+                $command = $body.command
+                $ip = $body.ip
+                if ($command -and $ip) {
+                    try {
+                        $credFile = "$PSScriptRoot\core0-cred.xml"
+                        $out = if ($ip -eq "192.168.1.14" -or $ip -eq "localhost") {
+                            Invoke-Expression $command 2>&1 | Out-String
+                        } elseif (Test-Path $credFile) {
+                            $cred = Import-CliXml $credFile
+                            Invoke-Command -ComputerName $ip -Credential $cred -ScriptBlock { param($c) Invoke-Expression $c 2>&1 } -ArgumentList $command | Out-String
+                        } else {
+                            Invoke-Command -ComputerName $ip -ScriptBlock { param($c) Invoke-Expression $c 2>&1 } -ArgumentList $command | Out-String
+                        }
+                        $responseData = @{ success = $true; ip = $ip; output = $out.Trim() } | ConvertTo-Json
+                        $Response.StatusCode = 200
+                    } catch {
+                        $responseData = @{ success = $false; ip = $ip; error = $_.Exception.Message } | ConvertTo-Json
+                        $Response.StatusCode = 500
+                    }
+                } else {
+                    $responseData = @{ error = "Missing 'command' or 'ip' in request body" } | ConvertTo-Json
+                    $Response.StatusCode = 400
                 }
             }
 

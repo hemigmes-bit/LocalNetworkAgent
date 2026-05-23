@@ -9,21 +9,32 @@
                           "OpenPorts":  "80,443"
                       },
                       {
-                          "Name":  "CORE0",
-                          "IP":  "192.168.1.17",
+"Name": "CORE0",
+            "IP": "192.168.1.16",
                           "OS":  null,
                           "OpenPorts":  "5985"
                       },
                       {
                           "Name":  "VICTORYMAR.home",
-                          "IP":  "192.168.1.16",
+                          "IP":  "192.168.1.14",
                           "OS":  "Microsoft Windows 11 Pro",
                           "OpenPorts":  "5985"
+                      },
+                      {
+"Name": "Redmi Henrys",
+            "IP": "192.168.1.19",
+                          "OS":  "Android",
+                          "OpenPorts":  "5555",
+                          "MAC":  "2a:8a:26:f3:d9:50",
+                          "Type":  "phone"
                       }
                   ],
     "NtfyTopic":  "local-network-agent",
     "ScheduledTasks":  [
 
                        ],
-    "Core0MAC":  "5C:85:7E:41:80:2B"
+    "Core0MAC":  "5C:85:7E:41:80:2B",
+    "KnownMacs":  {
+                      "2a:8a:26:f3:d9:50":  "Redmi Henrys"
+                  }
 }
