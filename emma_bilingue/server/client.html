@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Emma Bilingüe - Cliente WebSocket</title>
+    <style>
+        body { font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }
+        .status { padding: 10px; border-radius: 5px; margin: 10px 0; }
+        .listening { background: #e8f5e9; color: #2e7d32; }
+        .thinking { background: #fff3e0; color: #e65100; }
+        .speaking { background: #e3f2fd; color: #1565c0; }
+        .error { background: #ffebee; color: #c62828; }
+        #transcription { background: #f5f5f5; padding: 10px; border-radius: 5px; min-height: 100px; white-space: pre-wrap; }
+        .corrections { background: #fff3e0; padding: 10px; border-radius: 5px; }
+        .vocabulary { background: #e8eaf6; padding: 10px; border-radius: 5px; }
+        button { padding: 10px 20px; margin: 5px; cursor: pointer; }
+        audio { width: 100%; margin: 10px 0; }
+        .token { display: inline; }
+    </style>
+</head>
+<body>
+    <h1>🤖 Emma Bilingüe - Cliente WebSocket</h1>
+
+    <div>
+        <button id="btnConnect" onclick="connect()">Conectar</button>
+        <button id="btnDisconnect" onclick="disconnect()" disabled>Desconectar</button>
+        <button id="btnStartSession" onclick="startSession()" disabled>Iniciar Sesión</button>
+        <button id="btnEndSession" onclick="endSession()" disabled>Finalizar Sesión</button>
+    </div>
+
+    <div id="status" class="status">Desconectado</div>
+
+    <h3>🎤 Transcripción</h3>
+    <div id="transcription">Esperando...</div>
+
+    <h3>🤔 Respuesta de Emma (streaming)</h3>
+    <div id="llmResponse" style="background: #f5f5f5; padding: 10px; border-radius: 5px; min-height: 50px;"></div>
+
+    <h3>🔊 Audio</h3>
+    <audio id="audioPlayer" controls></audio>
+
+    <h3>📝 Correcciones</h3>
+    <div id="corrections" class="corrections"></div>
+
+    <h3>📚 Vocabulario</h3>
+    <div id="vocabulary" class="vocabulary"></div>
+
+    <h3>📊 Logs</h3>
+    <div id="logs" style="background: #f5f5f5; padding: 10px; height: 200px; overflow-y: auto; font-family: monospace; font-size: 12px;"></div>
+
+    <script>
+        let ws = null;
+        let audioContext = null;
+        let audioQueue = [];
+        let isPlaying = false;
+
+        function log(msg) {
+            const logs = document.getElementById('logs');
+            logs.innerHTML += new Date().toLocaleTimeString() + ' - ' + msg + '\n';
+            logs.scrollTop = logs.scrollHeight;
+        }
+
+        function setStatus(text, className) {
+            const el = document.getElementById('status');
+            el.textContent = text;
+            el.className = 'status ' + className;
+        }
+
+        async function connect() {
+            try {
+                ws = new WebSocket('ws://localhost:8000/ws');
+
+                ws.onopen = () => {
+                    log('✅ Conectado');
+                    setStatus('Conectado', 'listening');
+                    document.getElementById('btnConnect').disabled = true;
+                    document.getElementById('btnDisconnect').disabled = false;
+                    document.getElementById('btnStartSession').disabled = false;
+                };
+
+                ws.onmessage = (event) => {
+                    const msg = JSON.parse(event.data);
+                    handleMessage(msg);
+                };
+
+                ws.onclose = () => {
+                    log('❌ Desconectado');
+                    setStatus('Desconectado', 'error');
+                    document.getElementById('btnConnect').disabled = false;
+                    document.getElementById('btnDisconnect').disabled = true;
+                    document.getElementById('btnStartSession').disabled = true;
+                };
+
+                ws.onerror = (err) => {
+                    log('❌ Error: ' + err);
+                };
+            } catch (err) {
+                log('Error conectando: ' + err);
+            }
+        }
+
+        function disconnect() {
+            if (ws) ws.close();
+        }
+
+        function startSession() {
+            ws.send(JSON.stringify({
+                type: 'start_session',
+                level: 'B1',
+                unit: 'B1-u1'
+            }));
+        }
+
+        function endSession() {
+            ws.send(JSON.stringify({ type: 'end_session' }));
+        }
+
+        function handleMessage(msg) {
+            console.log('Mensaje recibido:', msg.type);
+
+            switch(msg.type) {
+                case 'state':
+                    document.getElementById('status').textContent = msg.state + ': ' + (msg.message || '');
+                    document.getElementById('status').className = 'status ' + msg.state;
+                    break;
+
+                case 'transcription_partial':
+                case 'transcription_final':
+                    document.getElementById('transcription').textContent = msg.text;
+                    break;
+
+                case 'llm_token':
+                    document.getElementById('llmResponse').textContent += msg.token;
+                    break;
+
+                case 'llm_complete':
+                    break;
+
+                case 'tts_chunk':
+                    playAudioChunk(msg.audio_base64);
+                    break;
+
+                case 'tts_complete':
+                    break;
+
+                case 'corrections':
+                    displayCorrections(msg.corrections);
+                    break;
+
+                case 'vocabulary':
+                    displayVocabulary(msg.vocabulary);
+                    break;
+
+                case 'session_start':
+                    log('Sesión iniciada: ' + msg.session_id);
+                    document.getElementById('btnStartSession').disabled = true;
+                    document.getElementById('btnEndSession').disabled = false;
+                    break;
+
+                case 'session_end':
+                    log('Sesión finalizada');
+                    break;
+
+                case 'error':
+                    log('❌ Error: ' + msg.error);
+                    break;
+            }
+        }
+
+        function playAudioChunk(base64) {
+            // Decodificar base64 a array buffer
+            const binaryString = atob(base64);
+            const bytes = new Uint8Array(binaryString.length);
+            for (let i = 0; i < binaryString.length; i++) {
+                bytes[i] = binaryString.charCodeAt(i);
+            }
+
+            // Crear audio context si no existe
+            if (!audioContext) {
+                audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            }
+
+            // Convertir a float32 (asumiendo int16 little endian)
+            const int16 = new Int16Array(bytes.buffer);
+            const float32 = new Float32Array(int16.length);
+            for (let i = 0; i < int16.length; i++) {
+                float32[i] = int16[i] / 32768.0;
+            }
+
+            // Crear buffer y reproducir
+            const buffer = audioContext.createBuffer(1, float32.length, 24000);
+            buffer.getChannelData(0).set(float32);
+
+            const source = audioContext.createBufferSource();
+            source.buffer = buffer;
+            source.connect(audioContext.destination);
+            source.start(0);
+        }
+
+        function displayCorrections(corrections) {
+            const div = document.getElementById('corrections');
+            div.innerHTML = corrections.map(c =>
+                `<div>❌ ${c.original} → ✅ ${c.corrected} <br><small>💡 ${c.explanation}</small></div>`
+            ).join('<hr>');
+        }
+
+        function displayVocabulary(vocab) {
+            const div = document.getElementById('vocabulary');
+            div.innerHTML = vocab.map(v =>
+                `<div>📖 <strong>${v.word}</strong>: ${v.translation} <br><small>${v.example}</small></div>`
+            ).join('<hr>');
+        }
+
+        function log(msg) {
+            console.log(msg);
+        }
+    </script>
+</body>
+</html>
