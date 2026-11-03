@@ -1,0 +1,39 @@
+# Emma Bilingüe - Versiones FIJADAS (Sesión 1 compatible)
+# Ejecutar: pip install -r requirements.txt
+# Esto evita que un pip install accidental traiga torch incompatible
+
+# ===== CRÍTICO: torch (RTX 5060 CUDA 12.8) =====
+# Versión específica que funciona con tu GPU. 
+# NUNCA actualizar torch sin antes verificar compatibilidad CUDA.
+torch==2.11.0+cu128
+torchvision
+torchaudio
+
+# ===== STT (Voice Loop) =====
+faster-whisper==1.2.1
+ctranslate2==4.8.4
+
+# ===== TTS (Kokoro) =====
+kokoro-onnx==0.6.1
+
+# ===== VAD (Silero) =====
+silero-vad==6.2.3
+
+# ===== Web & API =====
+fastapi==0.115.0
+uvicorn==0.32.0
+requests==2.34.2
+pydantic==2.13.4
+
+# ===== Audio & GUI =====
+pywebview==6.2.1
+sounddevice==0.5.6
+pyyaml==6.0.2
+
+# ===== Utilidades =====
+python-dotenv==1.2.2
+pydub==0.25.1
+numpy==2.3.5
+
+# ===== Testing (opcional) =====
+pytest==9.0.3

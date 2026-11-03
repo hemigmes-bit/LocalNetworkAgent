@@ -26,6 +26,6 @@ class FasterWhisperSTT:
         text = " ".join([seg.text for seg in segments]).strip()
         
         elapsed = (time.perf_counter() - start) * 1000
-        print(f"   ⏱️ STT: {elapsed:.0f}ms - '{text[:50]}...'")
+        print(f"   [STT] {elapsed:.0f}ms - '{text[:50]}...'")
         
         return text
