@@ -12,3 +12,11 @@ obj/
 api-token.json
 node_modules/
 clipboard_ref.png
+*.env
+logs/
+data/profile.db
+
+# Vite / pywebview
+avatar/dist/
+avatar/node_modules/
+

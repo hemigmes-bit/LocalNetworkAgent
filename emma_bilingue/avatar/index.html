@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Emma Avatar - VRM</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { 
+      background: #0a0a0f; 
+      overflow: hidden; 
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    }
+    #canvas { 
+      display: block; 
+      width: 100vw; 
+      height: 100vh; 
+    }
+    #ui-overlay {
+      position: fixed;
+      top: 20px;
+      left: 20px;
+      right: 20px;
+      z-index: 100;
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      pointer-events: none;
+    }
+    .status-panel {
+      background: rgba(10, 10, 15, 0.9);
+      border: 1px solid rgba(102, 126, 234, 0.3);
+      border-radius: 12px;
+      padding: 16px 20px;
+      backdrop-filter: blur(10px);
+      pointer-events: auto;
+    }
+    .status-panel h3 {
+      color: #667eea;
+      font-size: 14px;
+      font-weight: 600;
+      margin-bottom: 8px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    .state-display {
+      font-size: 24px;
+      font-weight: 700;
+      color: #fff;
+      text-transform: capitalize;
+    }
+    .state-display.idle { color: #4ade80; }
+    .state-display.listening { color: #60a5fa; }
+    .state-display.thinking { color: #fbbf24; }
+    .state-display.speaking { color: #f87171; }
+    .audio-meter {
+      width: 120px;
+      height: 8px;
+      background: rgba(255,255,255,0.1);
+      border-radius: 4px;
+      overflow: hidden;
+      margin-top: 12px;
+    }
+    .audio-meter-fill {
+      height: 100%;
+      background: linear-gradient(90deg, #667eea, #764ba2);
+      border-radius: 4px;
+      transition: width 50ms linear;
+      width: 0%;
+    }
+    .controls {
+      display: flex;
+      gap: 8px;
+    }
+    .btn {
+      background: rgba(102, 126, 234, 0.2);
+      border: 1px solid rgba(102, 126, 234, 0.5);
+      color: #fff;
+      padding: 8px 16px;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 12px;
+      transition: all 0.2s;
+    }
+    .btn:hover { background: rgba(102, 126, 234, 0.4); }
+    .btn.active { background: #667eea; }
+    #connection-status {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: #888;
+      font-size: 12px;
+    }
+    #connection-status.connected { color: #4ade80; }
+    .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #666;
+    }
+    #connection-status.connected .dot { background: #4ade80; box-shadow: 0 0 8px #4ade80; }
+  </style>
+</head>
+<body>
+  <canvas id="canvas"></canvas>
+  
+  <div id="ui-overlay">
+    <div class="status-panel">
+      <h3>Estado del Avatar</h3>
+      <div class="state-display idle" id="avatar-state">Idle</div>
+      <div class="audio-meter">
+        <div class="audio-meter-fill" id="audio-meter"></div>
+      </div>
+    </div>
+    
+    <div class="status-panel controls">
+      <button class="btn" id="btn-idle" onclick="setState('idle')">Idle</button>
+      <button class="btn" id="btn-listening" onclick="setState('listening')">Listening</button>
+      <button class="btn" id="btn-thinking" onclick="setState('thinking')">Thinking</button>
+      <button class="btn" id="btn-speaking" onclick="setState('speaking')">Speaking</button>
+      <button class="btn" id="btn-lipsync" onclick="toggleLipSync()">Lip-sync: ON</button>
+    </div>
+    
+    <div id="connection-status">
+      <span class="dot"></span>
+      <span>WebSocket: Desconectado</span>
+    </div>
+  </div>
+
+  <script type="module">
+    import { EmmaAvatar } from './avatar.js';
+    
+    const canvas = document.getElementById('canvas');
+    const avatar = new EmmaAvatar(canvas);
+    window.avatar = avatar; // Para debug en consola
+    
+    // UI Elements
+    const stateDisplay = document.getElementById('avatar-state');
+    const audioMeter = document.getElementById('audio-meter');
+    const connectionStatus = document.getElementById('connection-status');
+    const btnLipSync = document.getElementById('btn-lipsync');
+    const stateButtons = {
+      idle: document.getElementById('btn-idle'),
+      listening: document.getElementById('btn-listening'),
+      thinking: document.getElementById('btn-thinking'),
+      speaking: document.getElementById('btn-speaking')
+    };
+    
+    let lipSyncEnabled = true;
+    let ws = null;
+    
+    // Conectar WebSocket a FastAPI (Sesión 7)
+    function connectWebSocket() {
+      ws = new WebSocket('ws://localhost:8000/ws');
+      
+      ws.onopen = () => {
+        connectionStatus.classList.add('connected');
+        connectionStatus.querySelector('span:last-child').textContent = 'WebSocket: Conectado';
+        console.log('🔌 WebSocket conectado');
+      };
+      
+      ws.onmessage = (event) => {
+        try {
+          const msg = JSON.parse(event.data);
+          handleWSMessage(msg);
+        } catch (e) {
+          console.error('Error parsing WS message:', e);
+        }
+      };
+      
+      ws.onclose = () => {
+        connectionStatus.classList.remove('connected');
+        connectionStatus.querySelector('span:last-child').textContent = 'WebSocket: Desconectado (reconectando...)';
+        setTimeout(connectWebSocket, 3000);
+      };
+      
+      ws.onerror = (err) => {
+        console.error('WebSocket error:', err);
+      };
+    }
+    
+    function handleWSMessage(msg) {
+      // Mapear mensajes de Sesión 7 a estados del avatar
+      avatar.handleWSMessage(msg);
+      updateStateUI(avatar.currentState);
+      
+      // Lip-sync desde audio chunks TTS
+      if (msg.type === 'tts_chunk' && msg.amplitude !== undefined) {
+        avatar.setAudioAmplitude(msg.amplitude);
+      }
+      if (msg.type === 'tts_chunk' && msg.vowel !== undefined) {
+        avatar.setVowel(msg.vowel);
+      }
+    }
+    
+    function updateStateUI(state) {
+      stateDisplay.textContent = state.charAt(0).toUpperCase() + state.slice(1);
+      stateDisplay.className = 'state-display ' + state;
+      
+      // Actualizar botones activos
+      Object.entries(stateButtons).forEach(([key, btn]) => {
+        btn.classList.toggle('active', key === state);
+      });
+    }
+    
+    function setState(state) {
+      avatar.setState(state);
+      updateStateUI(state);
+      
+      // Enviar al WebSocket si está conectado
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'avatar_state', state }));
+      }
+    }
+    
+    function toggleLipSync() {
+      lipSyncEnabled = !lipSyncEnabled;
+      avatar.lipSyncEnabled = lipSyncEnabled;
+      btnLipSync.textContent = `Lip-sync: ${lipSyncEnabled ? 'ON' : 'OFF'}`;
+      btnLipSync.classList.toggle('active', lipSyncEnabled);
+    }
+    
+    // Simular audio para testing (cuando no hay TTS real)
+    function simulateAudio() {
+      if (avatar.currentState === 'speaking' && lipSyncEnabled) {
+        // Simular amplitud de audio con ruido
+        const amp = 0.3 + Math.random() * 0.5;
+        avatar.setAudioAmplitude(amp);
+        
+        // Simular vocales aleatorias
+        const vowels = ['a', 'e', 'i', 'o', 'u'];
+        avatar.setVowel(vowels[Math.floor(Math.random() * vowels.length)]);
+      } else {
+        avatar.setAudioAmplitude(0);
+      }
+      
+      // Actualizar medidor visual
+      audioMeter.style.width = `${avatar.audioAmplitude * 100}%`;
+      
+      requestAnimationFrame(simulateAudio);
+    }
+    
+    // Iniciar
+    connectWebSocket();
+    simulateAudio();
+    
+    // Exponer para debugging
+    window.setState = setState;
+    window.toggleLipSync = toggleLipSync;
+  </script>
+</body>
+</html>

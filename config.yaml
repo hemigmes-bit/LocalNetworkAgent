@@ -1,0 +1,77 @@
+# Emma Bilingüe - Configuración del Voice Loop
+# Copia este archivo y ajusta según necesites
+
+# Modelo LLM en OpenRouter (compatible OpenAI chat completions)
+llm:
+  model: "openrouter/auto"  # o "anthropic/claude-3.5-sonnet", "openai/gpt-4o", etc.
+  temperature: 0.7
+  max_tokens: 500
+  # API key SOLO desde variable de entorno OPENROUTER_API_KEY
+
+# Historial de conversación
+history:
+  max_turns: 10  # N turnos a mantener en contexto
+
+# STT (faster-whisper)
+stt:
+  model_size: "base"       # tiny, base, small, medium, large-v3
+  device: "cuda"           # cuda o cpu
+  compute_type: "float16"  # float16, int8_float16, int8
+  language: "es"           # idioma por defecto para transcripción
+  beam_size: 5
+  vad_filter: true
+  min_silence_ms: 500
+
+# VAD (Silero)
+vad:
+  threshold: 0.5
+  min_silence_duration_ms: 400
+  min_speech_duration_ms: 250
+
+# TTS (Kokoro)
+tts:
+  model_path: "kokoro-v1.0.onnx"
+  voices_path: "voices.json"
+  sample_rate: 24000
+  # Voces por idioma (códigos de voces de Kokoro)
+  voices:
+    es: "ef_dora"      # Español femenino
+    en: "af_bella"     # Inglés femenino
+    es_male: "em_alex" # Español masculino
+    en_male: "am_michael" # Inglés masculino
+
+# Audio
+audio:
+  sample_rate: 16000
+  channels: 1
+  block_size: 512
+  # Half-duplex: ignorar micrófono mientras suena el altavoz
+  half_duplex: true
+
+# Logging
+logging:
+  latency_csv: "logs/latency.csv"
+  level: "INFO"
+
+# Prompt del sistema (tutor de inglés)
+system_prompt: |
+  Eres Emma, tutora bilingüe de inglés/español amable y paciente.
+  
+  REGLAS:
+  1. Responde con frases CORTAS (máx 2-3 oraciones).
+  2. Puedes hablar español si el usuario lo necesita.
+  3. Corrige errores de forma natural y breve.
+  4. Introduce 1-2 palabras nuevas relevantes por turno.
+  5. Mantén un tono conversacional y alentador.
+  
+  FORMATO DE RESPUESTA (JSON obligatorio):
+  {
+    "spoken": "Frase natural que dices en voz alta",
+    "language": "en|es",
+    "corrections": [
+      {"original": "error", "corrected": "corrección", "type": "grammar|vocabulary|pronunciation", "explanation": "breve"}
+    ],
+    "vocabulary": [
+      {"word": "palabra", "translation": "traducción", "example": "ejemplo"}
+    ]
+  }

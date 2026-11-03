@@ -1,113 +1,156 @@
-# Local Network Agent v2.4.1
+# Emma Bilingüe - Voice Loop
 
-Gestor de red local Windows — escaneo, archivos remotos, shell, monitor, API REST.
+## Descripción
+Pipeline de voz completo para tutor bilingüe de inglés/español:
+- Detección de fin de frase (Silero VAD)
+- Reconocimiento de voz (faster-whisper GPU)
+- LLM streaming (OpenRouter API)
+- Síntesis de voz (Kokoro TTS)
+- Repetir hasta Ctrl+C
 
-## Inicio rápido
+## Requisitos previos
 
-```powershell
-# Doble clic en:
-Iniciar.bat
+### Hardware
+- GPU NVIDIA con CUDA (recomendado para faster-whisper GPU)
+- Micrófono y altavoces
 
-# O desde PowerShell:
-powershell -ExecutionPolicy Bypass -File "C:\Users\Usuario\LocalNetworkAgent\LocalNetworkAgent-GUI.ps1"
-```
+### Software
+- Python 3.12+
+- Variable de entorno: `OPENROUTER_API_KEY`
+- Modelos Kokoro (.onnx y .json)
 
-## Funcionalidades
+## Instalación
 
-| Botón | Función |
-|---|---|
-| **ARCHIVOS** | Explorador de archivos remotos (copiar/pegar entre PCs) |
-| **SHELL** | Consola PowerShell remota (Enter-PSSession) |
-| **WOL** | Encender CORE0 por Wake-on-LAN |
-| **VOZ** | Mensaje de voz al PC remoto |
-| **CHAT** | Chat en tiempo real |
-| **MONITOR** | Ver pantalla remota en vivo |
-
-## API REST (puerto 8082)
-
-Auto-arranca con la GUI. Token en `api-token.json`.
-
-| Método | Endpoint | Descripción |
-|---|---|---|
-| GET | `/api/status` | Estado del servidor |
-| GET | `/api/computers` | Dispositivos configurados |
-| POST | `/api/ping` | Ping a IP `{"ip":"..."}` |
-| POST | `/api/scan` | Escanear red (.1-.20) |
-| POST | `/api/wol` | Wake-on-LAN a CORE0 |
-| POST | `/api/speak` | Voz remota `{"text":"...","ip":"..."}` |
-| POST | `/api/shell` | Comando remoto `{"command":"...","ip":"..."}` |
-
-Autenticación: `Authorization: Bearer <token>`
-
-## Configuración
-
-`network-config.json`:
-```json
-{
-    "SubnetPrefix": "192.168.1",
-    "Computers": [
-        {"Name": "livebox.home", "IP": "192.168.1.1", "OpenPorts": "80,443"},
-        {"Name": "CORE0", "IP": "192.168.1.14", "OpenPorts": "5985"},
-        {"Name": "VICTORYMAR.home", "IP": "192.168.1.18", "OpenPorts": "5985"}
-    ],
-    "Core0MAC": "5C:85:7E:41:80:2B"
-}
-```
-
-## Archivos protegidos (no borrar)
-
-- `LocalNetworkAgent-GUI.ps1` — GUI principal
-- `Explorer_Agent.ps1` — Explorador de archivos remotos
-- `NetworkUtilsPublic.psm1` — Módulo de utilidades de red
-- `API-Server.ps1` — API REST (token en `api-token.json`)
-- `network-config.json` — Configuración de dispositivos
-- `Iniciar.bat` / `Iniciar.vbs` — Entry points
-- `core0-cred.xml` / `victorymar-cred.xml` — Credenciales (no compartir)
-- `AGENTS.md` — Instrucciones del asistente
-
-## Restaurar desde backup
-
-### 1. Descomprimir
-
-```powershell
-Expand-Archive -Path "$env:USERPROFILE\Desktop\LocalNetworkAgent_backup_*.zip" -DestinationPath "C:\Users\Usuario\LocalNetworkAgent" -Force
-```
-
-### 2. Restaurar dependencias npm
-
+### 1. Clonar / Verificar proyecto
 ```powershell
 cd C:\Users\Usuario\LocalNetworkAgent
-npm install
 ```
 
-### 3. Crear acceso directo
-
+### 2. Instalar dependencias Python
 ```powershell
-$sh = New-Object -COM WScript.Shell
-$lnk = $sh.CreateShortcut("$env:USERPROFILE\Desktop\LocalNetworkAgent.lnk")
-$lnk.TargetPath = "C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"
-$lnk.Arguments = '-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "C:\Users\Usuario\LocalNetworkAgent\LocalNetworkAgent-GUI.ps1"'
-$lnk.WorkingDirectory = "C:\Users\Usuario\LocalNetworkAgent"
-$lnk.Save()
+pip install faster-whisper silero-vad kokoro-onnx sounddevice requests pyyaml
 ```
 
-### 4. Verificar
-
+### 3. Instalar dependencias de sistema (Kokoro)
 ```powershell
-# Probar que arranca
-C:\Users\Usuario\LocalNetworkAgent\Iniciar.bat
+# En Windows, instala los requisitos de kokoro-onnx:
+pip install numpy sounddevice
+
+# Descargar modelos Kokoro:
+# - kokoro-v1.0.onnx
+# - voices.json
+# Colocarlos en el directorio actual o configurar en config.yaml
 ```
 
-### 5. Configurar WinRM en equipos remotos (si es necesario)
-
+### 4. Configurar API key OpenRouter
 ```powershell
-Enable-PSRemoting -Force
-Set-Item WSMan:\localhost\Client\TrustedHosts -Value "192.168.1.14" -Force
+# En Windows PowerShell:
+$env:OPENROUTER_API_KEY="sk-or-...."
+
+# O añade al archivo .env:
+echo OPENROUTER_API_KEY=sk-or-.... > .env
 ```
 
-## Requisitos
+### 5. Verificar configuración
+```powershell
+# Revisar config.yaml en la raíz
+notepad config.yaml
+```
 
-- Windows 10/11 x64
-- PowerShell 5.1+
-- PowerShell Remoting (WinRM) habilitado en equipos remotos
-- Credenciales guardadas en `core0-cred.xml` para acceso a CORE0
+### 6. Ejecutar Voice Loop
+```powershell
+cd C:\Users\Usuario\LocalNetworkAgent
+python python\src\main\python\voice_loop.py
+```
+
+## Flujo de operación
+
+1. El sistema inicia y espera a que hables
+2. Silero VAD detecta el fin de tu frase (silencio > 500ms)
+3. faster-whisper transcribe tu audio (GPU si está disponible)
+4. OpenRouter LLM genera una respuesta bilingüe (formato JSON estructurado)
+5. Kokoro TTS sintetiza la respuesta (voz inglesa o española según idioma)
+6. Se reproduce la respuesta por altavoz
+7. Se ignora el micrófono mientras suena (half-duplex)
+8. Vuelta al paso 1
+
+## Configuración (config.yaml)
+
+### LLM
+```yaml
+llm:
+  model: "openrouter/auto"           # Modelo OpenAI compatible
+  temperature: 0.7
+  max_tokens: 500
+```
+
+### STT (faster-whisper)
+```yaml
+stt:
+  model_size: "base"                 # tiny, base, small, medium, large-v3
+  device: "cuda"                     # cuda o cpu
+  compute_type: "float16"
+  language: "es"                     # idioma por defecto
+  beam_size: 5
+  vad_filter: true
+  min_silence_ms: 500
+```
+
+### VAD (Silero)
+```yaml
+vad:
+  threshold: 0.5
+  min_silence_duration_ms: 400
+  min_speech_duration_ms: 250
+```
+
+### TTS (Kokoro)
+```yaml
+tts:
+  model_path: "kokoro-v1.0.onnx"
+  voices_path: "voices.json"
+  sample_rate: 24000
+  voices:
+    en: "af_bella"       # Voz inglés femenino
+    es: "ef_dora"        # Voz español femenino
+```
+
+### Historial
+```yaml
+history:
+  max_turns: 10                      # N turnos a mantener en contexto
+```
+
+### Audio
+```yaml
+audio:
+  sample_rate: 16000
+  channels: 1
+  half_duplex: true
+```
+
+### System Prompt
+```yaml
+system_prompt: |
+  Eres Emma, tutora bilingüe de inglés/español amable.
+  ...
+```
+
+## Límites conocidos
+
+- **Sin micrófono real**: Esta versión usa simulación de audio. Para micrófono real, integrar `sounddevice` con dispositivo específico.
+- **Latencia**: Depende del modelo STT (base: ~1-2s en GPU, ~5-10s en CPU) y la latencia de OpenRouter API.
+- **Idioma**: El sistema detecta inglés vs español basándose en conteo de palabras; detección imperfecta en mezclas.
+
+## Archivos generados
+
+- `logs/latency.csv` - Tiempos por turno (STT, LLM first/full, TTS first, total)
+- `data/profile.db` - Base de datos SQLite del perfil del usuario
+- `data/` - Otros datos de SRS y sesiones
+
+## Desarrolladores
+
+Para añadir nuevos modelos o voces, modificar `config.yaml`. El pipeline está diseñado para ser modular:
+- Cambiar solo `stt/tts` en config.yaml sin tocar el código
+- Añadir nuevas voces en `tts/voices` sección
+- Cambiar modelo LLM en `llm/model`

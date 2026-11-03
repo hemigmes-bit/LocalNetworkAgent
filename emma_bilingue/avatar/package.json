@@ -1,0 +1,19 @@
+{
+  "name": "emma-avatar",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Emma Bilingüe VRM Avatar with three.js and @pixiv/three-vrm",
+  "main": "avatar.js",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "three": "^0.160.0",
+    "@pixiv/three-vrm": "^3.5.5"
+  },
+  "devDependencies": {
+    "vite": "^5.0.0"
+  }
+}
