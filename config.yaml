@@ -3,7 +3,7 @@
 
 # Modelo LLM en OpenRouter (compatible OpenAI chat completions)
 llm:
-  model: "google/gemma-4-12b"  # Modelo recomendado para tutor de inglés (Apache 2.0, cabe en 8GB VRAM)
+  model: "google/gemma-2-9b-it"  # Modelo gratuito en OpenRouter, bueno para tutor
   temperature: 0.7
   max_tokens: 500
   # API key SOLO desde variable de entorno OPENROUTER_API_KEY
@@ -14,19 +14,22 @@ history:
 
 # STT (faster-whisper)
 stt:
-  model_size: "base"       # tiny, base, small, medium, large-v3
+  model_size: "tiny"       # tiny = más rápido, base = más preciso
   device: "cuda"           # cuda o cpu
   compute_type: "float16"  # float16, int8_float16, int8
   language: "es"           # idioma por defecto para transcripción
-  beam_size: 5
+  beam_size: 1             # 1 = más rápido, 5 = más preciso
   vad_filter: true
   min_silence_ms: 500
 
 # VAD (Silero)
 vad:
   threshold: 0.5
-  min_silence_duration_ms: 400
+  min_silence_duration_ms: 800
   min_speech_duration_ms: 250
+  speech_pad_ms: 100
+  end_of_turn_silence_ms: 1200
+  min_speech_ms: 400
 
 # TTS (Kokoro)
 tts:
@@ -45,6 +48,7 @@ audio:
   sample_rate: 16000
   channels: 1
   block_size: 512
+  input_device: 1  # Micrófono (Realtek(R) Audio) - device 1 que sí funciona a 16000 Hz
   # Half-duplex: ignorar micrófono mientras suena el altavoz
   half_duplex: true
   # Post-TTS delay en ms: tiempo que esperar después de sintetizar voz

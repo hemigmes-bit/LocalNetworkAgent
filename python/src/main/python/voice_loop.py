@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Emma Bilingüe - Voice Loop
+Emma Bilingue - Voice Loop
 
 Pipeline completo: VAD -> STT -> LLM streaming -> TTS -> Altavoz
 Repite hasta Ctrl+C.
@@ -10,13 +10,13 @@ OpenRouter LLM streaming -> Kokoro TTS reproduce -> altavoz.
 Hasta que el usuario pulse Ctrl+C.
 
 REQUISITOS:
-- API key SOLO desde OPENROUTER_API_KEY (nunca en código)
+- API key SOLO desde OPENROUTER_API_KEY (nunca en codigo)
 - Media duplex: ignorar mic mientras suena el altavoz
 - time.perf_counter por turno: user_speech_end -> transcription_ready -> first_llm_token -> full_response -> first_audio_played
 - Guardar logs/latency.csv
-- Historial de últimos N turnos (configurable)
-- Voces: inglés y español configurables, selección por idioma de respuesta
-- Prompt sistema: tutora bilingüe, frases cortas, puede español
+- Historial de ultimos N turnos (configurable)
+- Voces: ingles y espanol configurables, seleccion por idioma de respuesta
+- Prompt sistema: tutora bilingue, frases cortas, puede espanol
 - Modular: cambiar solo la voz (TTS) sin reescribir pipeline completo
 """
 
@@ -28,15 +28,16 @@ import signal
 import threading
 import numpy as np
 from pathlib import Path
+import collections
 from collections import deque
 from dataclasses import dataclass, asdict
 from typing import Deque, List, Dict, Any, Optional
 
-# Añadir path del proyecto
+# Anadir path del proyecto
 PROJECT_ROOT = Path(__file__).parent.parent.parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT / "python" / "src" / "main" / "python"))
 
-# Cargar configuración YAML
+# Cargar configuracion YAML
 try:
     import yaml
     with open(PROJECT_ROOT / "config.yaml", "r", encoding="utf-8") as f:
@@ -45,7 +46,7 @@ except Exception as e:
     print(f"Error cargando config.yaml: {e}")
     sys.exit(1)
 
-# Configuración
+# Configuracion
 CONFIG = CONFIG or {}
 SYSTEM_PROMPT = CONFIG.get("system_prompt", "")
 LLM_CONFIG = CONFIG.get("llm", {})
@@ -107,14 +108,78 @@ class ConversationHistory:
     turn_times: Deque[float]
 
 # ==========================================
-# Inicialización de componentes
+# MicStream - Audio input stream with queue
+# ==========================================
+class MicStream:
+    def __init__(self, sample_rate=16000, block_size=512, device=None, channels=1):
+        self.sample_rate = sample_rate
+        self.block_size = block_size
+        self.device = device
+        self.channels = channels
+        self._stream = None
+        self._queue = collections.deque()
+        self._running = False
+        self._lock = threading.Lock()
+    
+    def _callback(self, indata, frames, time_info, status):
+        if status:
+            print(f"   [MicStream] Status: {status}")
+        if self._running:
+            with self._lock:
+                self._queue.append(indata.copy())
+    
+    def start(self):
+        if self._running:
+            return
+        import sounddevice as sd
+        self._stream = sd.InputStream(
+            samplerate=self.sample_rate,
+            blocksize=self.block_size,
+            channels=self.channels,
+            dtype='float32',
+            device=self.device,
+            callback=self._callback
+        )
+        self._stream.start()
+        self._running = True
+        print("   [MicStream] Iniciado")
+    
+    def flush(self):
+        """Vacia la cola de audio acumulada (usar al inicio de cada turno)."""
+        with self._lock:
+            self._queue.clear()
+    
+    def read(self, timeout=1.0):
+        """Lee un bloque de audio de la cola."""
+        import time
+        t0 = time.perf_counter()
+        while self._running:
+            with self._lock:
+                if self._queue:
+                    return self._queue.popleft()
+            if time.perf_counter() - t0 > timeout:
+                return None
+            time.sleep(0.001)
+        return None
+    
+    def stop(self):
+        if self._running:
+            self._running = False
+            if self._stream:
+                self._stream.stop()
+                self._stream.close()
+                self._stream = None
+            print("   [MicStream] Detenido")
+
+# ==========================================
+# Inicializacion de componentes
 # ==========================================
 
 import torch
 print(f"PyTorch {torch.__version__} - CUDA: {torch.cuda.is_available()}")
 
 if not torch.cuda.is_available():
-    print("Advertencia: CUDA no disponible, STT usará CPU (lento)")
+    print("Advertencia: CUDA no disponible, STT usara CPU (lento)")
 
 # STT (faster-whisper)
 print("Cargando STT (faster-whisper)...")
@@ -163,7 +228,7 @@ try:
     )
     print("VAD cargado")
 except ImportError:
-    print("Silero VAD no disponible, usando detección simple")
+    print("Silero VAD no disponible, usando deteccion simple")
     vad_iterator = None
 except Exception as e:
     print(f"Error cargando VAD: {e}")
@@ -299,7 +364,7 @@ def add_turn_to_history(user_text: str, assistant_spoken: str, assistant_languag
 
 def get_system_prompt_with_context() -> str:
     if not SYSTEM_PROMPT:
-        return "Eres Emma, tutora bilingüe de inglés/español amable. Responde con frases cortas (máx 2-3 oraciones). Puedes hablar español si el usuario lo necesita. Corrige errores de forma natural. Introduce 1-2 palabras nuevas por turno. Mantén un tono conversacional y alentador. FORMATO JSON OBLIGATORIO: {\"spoken\": \"frase natural\", \"language\": \"en|es\", \"corrections\": [], \"vocabulary\": []}"
+        return "Eres Emma, tutora bilingue de ingles/espanol amable. Responde con frases cortas (max 2-3 oraciones). Puedes hablar espanol si el usuario lo necesita. Corrige errores de forma natural. Introduce 1-2 palabras nuevas por turno. Manten un tono conversacional y alentador. FORMATO JSON OBLIGATORIO: {\"spoken\": \"frase natural\", \"language\": \"en|es\", \"corrections\": [], \"vocabulary\": []}"
     
     context = SYSTEM_PROMPT
     if history.user_texts:
@@ -314,40 +379,71 @@ def get_system_prompt_with_context() -> str:
 # Pipeline principal
 # ==========================================
 
-def record_audio_vad(vad_iterator, stop_event):
+def record_audio_vad(vad_iterator, stop_event, mic_stream):
+    """Graba hasta que el VAD marque fin de voz y pase un silencio de cierre.
+    Devuelve (chunks, voice_detected, peak_rms), igual que antes."""
+    FRAME_MS = 32            # 512 muestras a 16 kHz
+    END_SILENCE_MS = 1200    # silencio tras 'end' para cerrar el turno
+    MIN_SPEECH_MS = 400
+    MAX_TURN_S = 20
+    PRE_ROLL = 10            # ~320 ms previos al inicio de voz
+
+    vad_iterator.reset_states()
+    pre_roll = collections.deque(maxlen=PRE_ROLL)
     recorded_chunks = []
-    silence_count = 0
-    max_silence_frames = int(VAD_MIN_SILENCE_MS / 50)  # 50ms frames
-    
+    speaking = False
+    end_pending = False
+    frames_since_end = 0
+    peak_rms = 0.0
+    t_start = None
+
+    print("   [VAD] Escuchando...")
     while not stop_event.is_set():
         try:
-            import sounddevice as sd
-            recording = sd.rec(
-                int(AUDIO_SAMPLE_RATE * 0.05), 
-                samplerate=AUDIO_SAMPLE_RATE, 
-                channels=1
-            )
-            sd.wait()
-            chunk = recording[:, 0]
-            recorded_chunks.append(chunk)
-            
-            rms = np.sqrt(np.mean(chunk**2))
-            if rms < 0.01:
-                silence_count += 1
-            else:
-                silence_count = 0
-            
-            if silence_count > max_silence_frames:
-                break
-            
-            if stop_event.is_set():
-                return None
+            chunk = mic_stream.read(timeout=1.0)
         except Exception as e:
-            if not stop_event.is_set():
-                print(f"Error grabando: {e}")
-            return None
-    
-    return recorded_chunks
+            print(f"   Error grabando: {e}")
+            return None, False, 0.0
+        if chunk is None:
+            continue
+
+        x = chunk[:, 0] if chunk.ndim == 2 else chunk
+        peak_rms = max(peak_rms, float(np.sqrt(np.mean(x ** 2))))
+
+        ev = vad_iterator(x, return_seconds=False)
+        if ev:
+            if "start" in ev:
+                print(f"   [VAD] Inicio de voz: {ev}")
+                if not speaking:
+                    speaking = True
+                    t_start = time.perf_counter()
+                    recorded_chunks = list(pre_roll)
+                end_pending = False
+                frames_since_end = 0
+            elif "end" in ev and speaking:
+                print(f"   [VAD] Fin de voz: {ev}")
+                end_pending = True
+                frames_since_end = 0
+
+        if speaking:
+            recorded_chunks.append(x)
+            if end_pending:
+                frames_since_end += 1
+                if frames_since_end * FRAME_MS >= END_SILENCE_MS:
+                    print("   [VAD] Cerrando turno")
+                    break
+            if time.perf_counter() - t_start > MAX_TURN_S:
+                print("   [VAD] Limite de 20 s, cerrando turno")
+                break
+        else:
+            pre_roll.append(x)
+
+    if stop_event.is_set() or not speaking:
+        return None, False, peak_rms
+    if len(recorded_chunks) * FRAME_MS < MIN_SPEECH_MS:
+        print("   [VAD] Demasiado corto, descartado")
+        return [], False, peak_rms
+    return recorded_chunks, True, peak_rms
 
 def speak_text(text: str, language: str = "es", block: bool = True):
     voice = select_voice(language)
@@ -367,7 +463,7 @@ def speak_text(text: str, language: str = "es", block: bool = True):
     
     return tts_duration, first_audio_duration, audio
 
-def run_turn(turn_num: int):
+def run_turn(turn_num: int, mic_stream):
     global stop_loop
     
     print(f"\n{'='*60}")
@@ -379,14 +475,15 @@ def run_turn(turn_num: int):
     # --- ETAPA 1: Capturar audio con VAD ---
     print("1. Escuchando... (di algo y haz una pausa)")
     
+    mic_stream.flush()
     stop_event = threading.Event()
-    recorded_chunks = record_audio_vad(vad_iterator, stop_event)
+    recorded_chunks, voice_detected, peak_rms = record_audio_vad(vad_iterator, stop_event, mic_stream)
     
-    if not recorded_chunks:
-        print("   No se grabó audio / silencio")
+    if not voice_detected or not recorded_chunks:
+        print(f"   No se detecto voz (pico RMS: {peak_rms:.6f})")
         return None
     
-    # --- ETAPA 2: Transcripción (STT) ---
+    # --- ETAPA 2: Transcripcion (STT) ---
     print("2. Transcribiendo con faster-whisper...")
     
     try:
@@ -400,7 +497,7 @@ def run_turn(turn_num: int):
         stt_ms = (stt_end - turn_start) * 1000
         
         if not user_text or user_text.strip() == "":
-            print("   Transcripción vacía")
+            print("   Transcripcion vacia")
             return None
             
         print(f"   Usuario: '{user_text}'")
@@ -439,7 +536,7 @@ def run_turn(turn_num: int):
             "Authorization": f"Bearer {OPENROUTER_API_KEY}",
             "Content-Type": "application/json",
             "HTTP-Referer": "http://localhost",
-            "X-Title": "Emma Bilingüe"
+            "X-Title": "Emma Bilingue"
         }
         
         payload = {
@@ -543,7 +640,7 @@ def run_turn(turn_num: int):
     # --- ETAPA 5: Half-duplex pause ---
     print("5. Pausa half-duplex...")
     if HALF_DUPLEX:
-        print("   Micrófono desactivado durante la reproducción TTS")
+        print("   Microfono desactivado durante la reproduccion TTS")
         time.sleep(0.5)
     
     # --- COMPLETAR TURNO ---
@@ -590,7 +687,7 @@ def main():
     signal.signal(signal.SIGTERM, signal_handler)
     
     print("="*60)
-    print("Emma Bilingüe - Voice Loop Starting")
+    print("Emma Bilingue - Voice Loop Starting")
     print("="*60)
     print(f"Model: {MODEL_ID}")
     print(f"History: {MAX_HISTORY} turns")
@@ -605,6 +702,16 @@ def main():
     
     os.makedirs("logs", exist_ok=True)
     
+    # --- Inicializar MicStream una sola vez ---
+    input_device = AUDIO_CONFIG.get("input_device", 1)
+    mic_stream = MicStream(
+        sample_rate=AUDIO_SAMPLE_RATE,
+        block_size=AUDIO_CONFIG.get("block_size", 512),
+        device=input_device,
+        channels=AUDIO_CONFIG.get("channels", 1)
+    )
+    mic_stream.start()
+    
     turn_num = 0
     
     try:
@@ -614,7 +721,7 @@ def main():
                 print("Limit of 20 turns reached")
                 break
             
-            result = run_turn(turn_num)
+            result = run_turn(turn_num, mic_stream)
             
             if result is None:
                 print("Turn incomplete, continuing...")
@@ -624,9 +731,10 @@ def main():
             
             print("Pause between turns (1s)...")
             time.sleep(1)
-            
     except KeyboardInterrupt:
         print("\nKeyboard interrupt")
+    finally:
+        mic_stream.stop()
     
     # ==========================================
     # Final summary
