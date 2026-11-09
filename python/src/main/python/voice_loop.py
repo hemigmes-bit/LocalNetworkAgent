@@ -10,7 +10,8 @@ OpenRouter LLM streaming -> Kokoro TTS reproduce -> altavoz.
 Hasta que el usuario pulse Ctrl+C.
 
 REQUISITOS:
-- API key SOLO desde OPENROUTER_API_KEY (nunca en codigo)
+- Ollama corriendo localmente (ollama serve)
+- Modelo qwen2.5:7b-instruct-q4_K_M descargado (ollama pull qwen2.5:7b-instruct-q4_K_M)
 - Media duplex: ignorar mic mientras suena el altavoz
 - time.perf_counter por turno: user_speech_end -> transcription_ready -> first_llm_token -> full_response -> first_audio_played
 - Guardar logs/latency.csv
@@ -55,17 +56,33 @@ VAD_CONFIG = CONFIG.get("vad", {})
 TTS_CONFIG = CONFIG.get("tts", {})
 HISTORY_CONFIG = CONFIG.get("history", {})
 AUDIO_CONFIG = CONFIG.get("audio", {})
+MEMORY_CONFIG = CONFIG.get("memory", {})
 
-MODEL_ID = LLM_CONFIG.get("model", "google/gemma-4-12b")
+# Configuración nueva
+MEMORY_ENABLED = MEMORY_CONFIG.get("enabled", True)
+MEMORY_PATH = MEMORY_CONFIG.get("path", "memoria_emma.json")
+VOICE_SWITCHING_ENABLED = MEMORY_CONFIG.get("voice_switching", True)
+WEB_SEARCH_ENABLED = MEMORY_CONFIG.get("web_search", False)
+WEB_SEARCH_ENGINE = MEMORY_CONFIG.get("engine", "duckduckgo")
+
+# Umbral de nivel de inglés (0-1, donde 0 es principiante y 1 es experto)
+ENGLISH_PROFICIENCY_THRESHOLD = MEMORY_CONFIG.get("english_proficiency_threshold", 0.5)
+
+# Ollama local - no requiere API key
+OLLAMA_URL = "http://localhost:11434"
+OLLAMA_MODEL = "qwen2.5-coder:7b"
+
+LLM_MODELS = [OLLAMA_MODEL]
 TEMPERATURE = LLM_CONFIG.get("temperature", 0.7)
 MAX_TOKENS = LLM_CONFIG.get("max_tokens", 500)
 MAX_HISTORY = HISTORY_CONFIG.get("max_turns", 10)
 STT_MODEL_SIZE = STT_CONFIG.get("model_size", "base")
 STT_DEVICE = STT_CONFIG.get("device", "cuda")
 STT_COMPUTE_TYPE = STT_CONFIG.get("compute_type", "float16")
-STT_LANGUAGE = STT_CONFIG.get("language", "es")
+STT_LANGUAGE = STT_CONFIG.get("language", "en")
 VAD_THRESHOLD = VAD_CONFIG.get("threshold", 0.5)
 VAD_MIN_SILENCE_MS = VAD_CONFIG.get("min_silence_duration_ms", 400)
+VAD_END_SILENCE_MS = VAD_CONFIG.get("end_of_turn_silence_ms", 800)
 TTS_MODEL = TTS_CONFIG.get("model_path", "kokoro-v1.0.onnx")
 TTS_VOICES_PATH = TTS_CONFIG.get("voices_path", "voices.json")
 TTS_SAMPLE_RATE = TTS_CONFIG.get("sample_rate", 24000)
@@ -74,13 +91,6 @@ TTS_SPANISH_VOICE = TTS_CONFIG.get("voices", {}).get("es", "ef_dora")
 AUDIO_SAMPLE_RATE = AUDIO_CONFIG.get("sample_rate", 16000)
 HALF_DUPLEX = AUDIO_CONFIG.get("half_duplex", True)
 POST_TTS_DELAY_MS = AUDIO_CONFIG.get("post_tts_delay_ms", 500)
-
-# Variable de entorno para API key
-OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
-if not OPENROUTER_API_KEY:
-    print("ERROR: OPENROUTER_API_KEY no encontrada en variables de entorno")
-    print("   Ejecuta: export OPENROUTER_API_KEY='tu-clave-aqui'")
-    sys.exit(1)
 
 # ==========================================
 # Data Classes
@@ -195,14 +205,25 @@ except Exception as e:
     print(f"Error cargando STT: {e}")
     sys.exit(1)
 
-# LLM (OpenRouter)
-print("Cargando LLM (OpenRouter)...")
+# LLM (Ollama local)
+print(f"Verificando Ollama en {OLLAMA_URL}...")
 try:
-    from llm_openrouter import OpenRouterLLM
-    llm = OpenRouterLLM(api_key=OPENROUTER_API_KEY, model=MODEL_ID)
-    print("LLM cargado")
+    import requests
+    resp = requests.get(f"{OLLAMA_URL}/api/tags", timeout=5)
+    if resp.status_code == 200:
+        models = [m["name"] for m in resp.json().get("models", [])]
+        if OLLAMA_MODEL in models:
+            print(f"LLM (Ollama) listo: {OLLAMA_MODEL}")
+        else:
+            print(f"Modelo {OLLAMA_MODEL} no encontrado. Disponibles: {models}")
+            print(f"Ejecuta: ollama pull {OLLAMA_MODEL}")
+            sys.exit(1)
+    else:
+        print("Ollama no responde. Ejecuta: ollama serve")
+        sys.exit(1)
 except Exception as e:
-    print(f"Error cargando LLM: {e}")
+    print(f"Error conectando a Ollama: {e}")
+    print("Asegúrate de que Ollama esté corriendo: ollama serve")
     sys.exit(1)
 
 # TTS (Kokoro)
@@ -337,25 +358,28 @@ def select_voice(language: str) -> str:
         return TTS_SPANISH_VOICE
 
 def save_latency_csv(results: List[TurnResult], csv_path: str = "logs/latency.csv"):
-    os.makedirs("logs", exist_ok=True)
-    file_exists = os.path.exists(csv_path)
-    
-    with open(csv_path, "a", newline="", encoding="utf-8") as f:
-        writer = csv.writer(f)
-        if not file_exists:
-            writer.writerow([
-                "turn", "stt_ms", "llm_first_token_ms", "llm_full_ms", 
-                "tts_first_ms", "total_ms", "user_text", "assistant_spoken",
-                "assistant_language"
-            ])
-        for r in results:
-            writer.writerow([
-                r.turn, r.stt_ms, r.llm_first_token_ms, r.llm_full_ms,
-                r.tts_first_ms, r.total_ms, 
-                r.user_text[:50] if r.user_text else "",
-                r.assistant_spoken[:50] if r.assistant_spoken else "",
-                r.assistant_language
-            ])
+    try:
+        os.makedirs("logs", exist_ok=True)
+        file_exists = os.path.exists(csv_path)
+        
+        with open(csv_path, "a", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f)
+            if not file_exists:
+                writer.writerow([
+                    "turn", "stt_ms", "llm_first_token_ms", "llm_full_ms", 
+                    "tts_first_ms", "total_ms", "user_text", "assistant_spoken",
+                    "assistant_language"
+                ])
+            for r in results:
+                writer.writerow([
+                    r.turn, r.stt_ms, r.llm_first_token_ms, r.llm_full_ms,
+                    r.tts_first_ms, r.total_ms, 
+                    (r.user_text[:50] if r.user_text else "").replace("\n", " ").replace("\r", " "),
+                    (r.assistant_spoken[:50] if r.assistant_spoken else "").replace("\n", " ").replace("\r", " "),
+                    r.assistant_language
+                ])
+    except Exception as e:
+        print(f"   [WARN] Error guardando CSV: {e}")
 
 def add_turn_to_history(user_text: str, assistant_spoken: str, assistant_language: str):
     history.user_texts.append(user_text)
@@ -396,6 +420,7 @@ def record_audio_vad(vad_iterator, stop_event, mic_stream):
     frames_since_end = 0
     peak_rms = 0.0
     t_start = None
+    END_SILENCE_MS = VAD_END_SILENCE_MS
 
     print("   [VAD] Escuchando...")
     while not stop_event.is_set():
@@ -492,7 +517,7 @@ def run_turn(turn_num: int, mic_stream):
         timer.start()
         timer.mark_stt()
         
-        user_text = stt.transcribe(full_audio, language=STT_LANGUAGE)
+        user_text, detected_lang, _forced = stt.transcribe(full_audio, language=STT_LANGUAGE)
         stt_end = time.perf_counter()
         stt_ms = (stt_end - turn_start) * 1000
         
@@ -500,7 +525,7 @@ def run_turn(turn_num: int, mic_stream):
             print("   Transcripcion vacia")
             return None
             
-        print(f"   Usuario: '{user_text}'")
+        print(f"   Usuario: '{user_text}' (idioma: {detected_lang})")
         
     except Exception as e:
         print(f"Error en STT: {e}")
@@ -529,49 +554,47 @@ def run_turn(turn_num: int, mic_stream):
         llm_start = time.perf_counter()
         first_token_time = None
         full_response = ""
-        
+
         import requests
-        
-        headers = {
-            "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-            "Content-Type": "application/json",
-            "HTTP-Referer": "http://localhost",
-            "X-Title": "Emma Bilingue"
-        }
-        
+
+        OLLAMA_CHAT_URL = "http://localhost:11434/api/chat"
+
         payload = {
-            "model": MODEL_ID,
+            "model": OLLAMA_MODEL,
             "messages": messages,
             "stream": True,
-            "temperature": TEMPERATURE,
-            "max_tokens": MAX_TOKENS
+            "options": {
+                "temperature": TEMPERATURE,
+                "num_predict": MAX_TOKENS
+            }
         }
-        
+
+        print(f"   [LLM] Usando modelo local (Ollama): {OLLAMA_MODEL}")
+
         response = requests.post(
-            "https://openrouter.ai/api/v1/chat/completions",
-            headers=headers,
+            OLLAMA_CHAT_URL,
             json=payload,
             stream=True,
-            timeout=60
+            timeout=120
         )
-        response.raise_for_status()
+        if response.status_code != 200:
+            print(f"   [LLM] Error {response.status_code}: {response.text}")
+            raise Exception(f"Ollama error {response.status_code}")
         
         for line in response.iter_lines():
             if line:
                 line = line.decode('utf-8')
-                if line.startswith("data: "):
-                    data = line[6:]
-                    if data == "[DONE]":
+                try:
+                    chunk = json.loads(line)
+                    delta = chunk.get("message", {}).get("content", "")
+                    if delta:
+                        full_response += delta
+                        if first_token_time is None:
+                            first_token_time = time.perf_counter()
+                    if chunk.get("done", False):
                         break
-                    try:
-                        chunk = json.loads(data)
-                        delta = chunk.get("choices", [{}])[0].get("delta", {}).get("content", "")
-                        if delta:
-                            full_response += delta
-                            if first_token_time is None:
-                                first_token_time = time.perf_counter()
-                    except json.JSONDecodeError:
-                        pass
+                except json.JSONDecodeError:
+                    pass
         
         llm_end = time.perf_counter()
         llm_full_ms = (llm_end - llm_start) * 1000
@@ -689,12 +712,11 @@ def main():
     print("="*60)
     print("Emma Bilingue - Voice Loop Starting")
     print("="*60)
-    print(f"Model: {MODEL_ID}")
+    print(f"Model: {OLLAMA_MODEL} (local Ollama)")
     print(f"History: {MAX_HISTORY} turns")
     print(f"VAD threshold: {VAD_THRESHOLD}")
     print(f"TTS voices: en={TTS_ENGLISH_VOICE}, es={TTS_SPANISH_VOICE}")
     print(f"Half-duplex: {HALF_DUPLEX}, Post-TTS delay: {POST_TTS_DELAY_MS}ms")
-    print(f"OPENROUTER_API_KEY: {'Set' if OPENROUTER_API_KEY else 'NOT SET'}")
     print("="*60)
     print("Speak and the system will transcribe -> LLM -> voice")
     print("Press Ctrl+C to stop after current turn")
@@ -721,13 +743,21 @@ def main():
                 print("Limit of 20 turns reached")
                 break
             
-            result = run_turn(turn_num, mic_stream)
+            try:
+                result = run_turn(turn_num, mic_stream)
+            except Exception as e:
+                print(f"[ERROR] Turno {turn_num} falló: {e}")
+                import traceback
+                traceback.print_exc()
+                print("Continuando con siguiente turno...")
+                continue
             
             if result is None:
                 print("Turn incomplete, continuing...")
                 continue
             
-            save_latency_csv(turn_results, "logs/latency.csv")
+            # Guardar CSV solo al final o cada N turnos para evitar problemas
+            # save_latency_csv(turn_results, "logs/latency.csv")
             
             print("Pause between turns (1s)...")
             time.sleep(1)
@@ -768,8 +798,209 @@ def main():
         print(f"   Turn {r.turn}: STT={r.stt_ms:.0f}ms LLM1={r.llm_first_token_ms:.0f}ms LLMF={r.llm_full_ms:.0f}ms TTS1={r.tts_first_ms:.0f}ms Tot={r.total_ms:.0f}ms | '{r.user_text[:30]}...' -> '{r.assistant_spoken[:30]}...' ({r.assistant_language})")
     
     print("="*60)
-    print("Voice Loop ended. Goodbye!")
+print("Voice Loop ended. Goodbye!")
+print("="*60)
+
+# Cargar memoria persistente si existe
+memoria_emma = []
+historial_path = "memoria_emma.json"
+if os.path.exists(historial_path):
+    try:
+        with open(historial_path, "r", encoding="utf-8") as f:
+            memoria_emma = json.load(f)
+        print(f"Memoria cargada: {len(memoria_emma)} turnos previos")
+    except Exception as e:
+        print(f"[WARN] No se pudo cargar memoria: {e}")
+        memoria_emma = []
+
+def main():
+    global stop_loop, total_turns
+    
+    def signal_handler(signum, frame):
+        global stop_loop
+        print("\nCtrl+C detectado. Finalizando...")
+        stop_loop = True
+    
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+    
     print("="*60)
+    print("Emma Bilingue - Voice Loop Starting")
+    print("="*60)
+    print(f"Model: {OLLAMA_MODEL} (local Ollama)")
+    print(f"History: {MAX_HISTORY} turns")
+    print(f"VAD threshold: {VAD_THRESHOLD}")
+    print(f"TTS voices: en={TTS_ENGLISH_VOICE}, es={TTS_SPANISH_VOICE}")
+    print(f"Half-duplex: {HALF_DUPLEX}, Post-TTS delay: {POST_TTS_DELAY_MS}ms")
+    print("="*60)
+    print("Speak and the system will transcribe -> LLM -> voice")
+    print("Press Ctrl+C to stop after current turn")
+    print("="*60)
+    
+    os.makedirs("logs", exist_ok=True)
+    
+    # --- Cargar memoria persistente al iniciar ---
+    memoria = cargar_memoria()
+    
+    # --- Inicializar MicStream una sola vez ---
+    input_device = AUDIO_CONFIG.get("input_device", 1)
+    mic_stream = MicStream(
+        sample_rate=AUDIO_SAMPLE_RATE,
+        block_size=AUDIO_CONFIG.get("block_size", 512),
+        device=input_device,
+        channels=AUDIO_CONFIG.get("channels", 1)
+    )
+    mic_stream.start()
+    
+    turn_num = 0
+    
+    try:
+        while not stop_loop:
+            turn_num += 1
+            if turn_num > 20:
+                print("Limit of 20 turns reached")
+                break
+            
+            try:
+                result = run_turn(turn_num, mic_stream, memoria)
+            except Exception as e:
+                print(f"[ERROR] Turno {turn_num} falló: {e}")
+                import traceback
+                traceback.print_exc()
+                print("Continuando con siguiente turno...")
+                # Guardar memoria aunque fallen los turns
+                if MEMORY_ENABLED:
+                    guardar_memoria(memoria)
+                continue
+            
+            if result is None:
+                print("Turn incomplete, continuing...")
+                # Guardar memoria aún si el turno está incompleto
+                if MEMORY_ENABLED:
+                    # Añadir entrada vacía o skip
+                    pass
+                continue
+            
+            # Guardar memoria después de cada turno exitoso
+            if MEMORY_ENABLED:
+                memoria.append({
+                    "turno": result.turn,
+                    "usuario": result.user_text,
+                    "asistente": result.assistant_spoken,
+                    "idioma_usuario": result.assistant_language,
+                    "marcas_voz": result.corrections if result.corrections else []
+                })
+                guardar_memoria(memoria)
+            
+            # Guardar CSV al final (solo si hay resultados acumulados)
+            # save_latency_csv(turn_results, "logs/latency.csv")
+            
+            print("Pause between turns (1s)...")
+            time.sleep(1)
+    except KeyboardInterrupt:
+        print("\nKeyboard interrupt")
+    finally:
+        mic_stream.stop()
+    
+    # Guardar memoria final y reporte
+    if MEMORY_ENABLED and memoria:
+        guardar_memoria(memoria)
+        print(f"\nMemoria guardada: {len(memoria)} turnos en {MEMORY_PATH}")
+    
+    # ==========================================
+    # Final summary
+    # ==========================================
+    
+    print("\n" + "="*60)
+    print("FINAL SUMMARY - Conversation Ended")
+    print("="*60)
+    
+    if turn_results:
+        avg_stt = sum(r.stt_ms for r in turn_results) / len(turn_results)
+        avg_llm_first = sum(r.llm_first_token_ms for r in turn_results) / len(turn_results)
+        avg_llm_full = sum(r.llm_full_ms for r in turn_results) / len(turn_results)
+        avg_tts_first = sum(r.tts_first_ms for r in turn_results) / len(turn_results)
+        avg_total = sum(r.total_ms for r in turn_results) / len(turn_results)
+        
+        print(f"Total turns: {len(turn_results)}")
+        print(f"   Avg STT:          {avg_stt:.0f}ms")
+        print(f"   Avg LLM first:    {avg_llm_first:.0f}ms")
+        print(f"   Avg LLM full:     {avg_llm_full:.0f}ms")
+        print(f"   Avg TTS first:    {avg_tts_first:.0f}ms")
+        print(f"   Avg TOTAL:        {avg_total:.0f}ms")
+        
+        save_latency_csv(turn_results, "logs/latency.csv")
+        print(f"\nData saved to: logs/latency.csv")
+    else:
+        print("No turns completed")
+    
+    print("\nTurn details:")
+    for r in turn_results:
+        print(f"   Turn {r.turn}: STT={r.stt_ms:.0f}ms LLM1={r.llm_first_token_ms:.0f}ms LLMF={r.llm_full_ms:.0f}ms TTS1={r.tts_first_ms:.0f}ms Tot={r.total_ms:.0f}ms | '{r.user_text[:30]}...' -> '{r.assistant_spoken[:30]}...' ({r.assistant_language})")
+    
+    print("="*60)
+print("Voice Loop ended. Goodbye!")
+print("="*60)
+
+if __name__ == "__main__":
+    main()
+
+
+def cargar_memoria():
+    """Carga la memoria persistente desde memoria_emma.json si existe."""
+    memoria_path = "memoria_emma.json"
+    if os.path.exists(memoria_path):
+        try:
+            with open(memoria_path, "r", encoding="utf-8") as f:
+                memoria = json.load(f)
+            print(f"Memoria cargada: {len(memencia)} turnos previos")
+            return memoria
+        except Exception as e:
+            print(f"[WARN] No se pudo cargar memoria: {e}")
+    return []
+
+
+def guardar_memoria(memoria):
+    """Guarda el historial de conversaciones en memoria_emma.json."""
+    memoria_path = "memoria_emma.json"
+    try:
+        with open(memoria_path, "w", encoding="utf-8") as f:
+            json.dump(memoria, f, ensure_ascii=False, indent=4)
+    except Exception as e:
+        print(f"[WARN] No se pudo guardar memoria: {e}")
+
+
+def cambiar_voz(nueva_voz: str):
+    """Cambia la voz de TTS al indicada."""
+    global TTS_ENGLISH_VOICE, TTS_SPANISH_VOICE
+    if nueva_voz.lower().startswith("en") or nueva_voz == "inglés":
+        TTS_ENGLISH_VOICE = "af_bella"
+        TTS_SPANISH_VOICE = "af_bella"
+        print("[VOZ] Voz cambiado a inglés (af_bella)")
+    elif nueva_voz.lower().startswith("es") or nueva_voz == "español":
+        TTS_ENGLISH_VOICE = "af_bella"
+        TTS_SPANISH_VOICE = "ef_dora"
+        print("[VOZ] Voz cambiado a español (ef_dora)")
+    elif nueva_voz.lower().startswith("m") or nueva_voz == "masculino":
+        # No hay voz masculina predefinida en Kokoro fácilmente cambiable,
+        # pero registramos el cambio para futuras expansiones
+        print("[VOZ] Cambio a voz masculina (pending)")
+    else:
+        print(f"[VOZ] Opción no reconocida: {nueva_voz}")
+
+
+def consultar_memoria(texto_usuario: str) -> str:
+    """Consulta la memoria de conversaciones previas para no repetir información."""
+    resultados = []
+    for entrada in memoria_emma:
+        if texto_usuario.lower() in entrada.get("usuario", "").lower():
+            resultados.append(entrada)
+    return resultados
+
+
+# Cargar memoria persistente al iniciar
+memoria_emma = cargar_memoria()
+historial_path = "memoria_emma.json"
 
 if __name__ == "__main__":
     main()
