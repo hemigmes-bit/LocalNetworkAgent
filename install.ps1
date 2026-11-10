@@ -44,9 +44,9 @@ try {
 Write-Host "`n[1/4] Instalando dependencias Python..." -ForegroundColor Yellow
 $requirements = Join-Path $ProjectRoot "requirements.txt"
 if (Test-Path $requirements) {
-    $pipArgs = @("install", "-r", $requirements)
-    if ($GlobalInstall) { $pipArgs += "--global" }
-    & $PythonPath -m @pipArgs
+    $cmd = "$PythonPath -m pip install -r `"$requirements`""
+    if ($GlobalInstall) { $cmd += " --global" }
+    Invoke-Expression $cmd
     if ($LASTEXITCODE -ne 0) {
         Write-Host "✗ Error instalando dependencias" -ForegroundColor Red
         exit 1
@@ -67,7 +67,16 @@ if (-not $SkipModels) {
     foreach ($model in $models) {
         $dest = Join-Path $ProjectRoot $model.Name
         if (-not (Test-Path $dest)) {
-            Write-Host "  Descargando $($model.Name) ($(( [math]::Round((Invoke-WebRequest -Uri $model.Url -Method Head -UseBasicParsing).Headers['Content-Length'] / 1MB) )) MB)..."
+            # Get file size for display
+            $sizeMB = 0
+            try {
+                $head = Invoke-WebRequest -Uri $model.Url -Method Head -UseBasicParsing -ErrorAction SilentlyContinue
+                if ($head.Headers['Content-Length']) {
+                    $sizeMB = [math]::Round([int64]$head.Headers['Content-Length'] / 1048576)
+                }
+            } catch { }
+            
+            Write-Host "  Descargando $($model.Name) ($sizeMB MB)..."
             try {
                 Invoke-WebRequest -Uri $model.Url -OutFile $dest -UseBasicParsing
                 Write-Host "  ✓ $($model.Name)" -ForegroundColor Green
@@ -94,7 +103,8 @@ Write-Host "`n[4/4] Verificando API Key..." -ForegroundColor Yellow
 $envKey = $env:OPENROUTER_API_KEY
 if ([string]::IsNullOrEmpty($envKey)) {
     Write-Host "⚠ OPENROUTER_API_KEY no configurada en variables de entorno" -ForegroundColor Yellow
-    Write-Host "  Configúrala con: `n  `$env:OPENROUTER_API_KEY = 'tu-clave-aqui'`n  O añádela a tu perfil de PowerShell/CMD" -ForegroundColor Yellow
+    Write-Host "  Configúrala con: `$env:OPENROUTER_API_KEY = 'tu-clave-aqui'" -ForegroundColor Yellow
+    Write-Host "  O añádela a tu perfil de PowerShell/CMD" -ForegroundColor Yellow
 } else {
     Write-Host "✓ OPENROUTER_API_KEY configurada" -ForegroundColor Green
 }
@@ -103,13 +113,20 @@ if ([string]::IsNullOrEmpty($envKey)) {
 $desktop = [Environment]::GetFolderPath("Desktop")
 $shortcutPath = Join-Path $desktop "Emma Bilingüe.lnk"
 if (-not (Test-Path $shortcutPath)) {
-    Write-Host "`n¿Crear acceso directo en Escritorio? (s/n): " -NoNewline
-    $answer = Read-Host
-    if ($answer -eq 's') {
+    $createShortcut = $false
+    try {
+        Write-Host "`n¿Crear acceso directo en Escritorio? (s/n): " -NoNewline
+        $answer = Read-Host
+        if ($answer -eq 's') { $createShortcut = $true }
+    } catch {
+        # Non-interactive mode, skip shortcut creation
+        Write-Host "  (Modo no interactivo, omitiendo acceso directo)" -ForegroundColor Gray
+    }
+    if ($createShortcut) {
         $shell = New-Object -ComObject WScript.Shell
         $shortcut = $shell.CreateShortcut($shortcutPath)
         $shortcut.TargetPath = "powershell.exe"
-        $shortcut.Arguments = "-NoExit -Command `\"cd '$ProjectRoot'; python python\src\main\python\voice_loop.py`\""
+        $shortcut.Arguments = "-NoExit -Command `"cd '$ProjectRoot'; python python\src\main\python\voice_loop.py`""
         $shortcut.WorkingDirectory = $ProjectRoot
         $shortcut.IconLocation = Join-Path $ProjectRoot "assets\emma.ico"
         $shortcut.Save()
@@ -127,4 +144,8 @@ Write-Host "  python python\src\main\python\voice_loop.py" -ForegroundColor Whit
 Write-Host ""
 Write-Host "Con auriculares conectados y OPENROUTER_API_KEY configurada." -ForegroundColor Yellow
 Write-Host ""
-Read-Host "Presiona Enter para salir"
+try {
+    Read-Host "Presiona Enter para salir"
+} catch {
+    # Non-interactive mode
+}

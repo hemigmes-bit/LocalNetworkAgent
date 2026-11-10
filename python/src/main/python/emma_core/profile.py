@@ -210,6 +210,7 @@ class ProfileManager:
             return [dict(row) for row in cursor.fetchall()]
 
     def update_srs_after_review(self, word: str, quality: int):
+        quality = max(0, min(5, int(quality)))
         with self.get_conn() as conn:
             cursor = conn.execute(
                 "SELECT interval, repetitions, ease_factor FROM vocabulary_srs WHERE word=?", (word,)
@@ -229,7 +230,7 @@ class ProfileManager:
                 elif reps == 1:
                     interval = 6
                 else:
-                    interval = round(interval * item.get('ease_factor', 2.5))
+                    interval = round(interval * ease)
                 reps += 1
 
             ease = max(1.3, ease + (0.1 - (5 - quality) * (0.08 + (5 - quality) * 0.02)))
@@ -268,9 +269,10 @@ class ProfileManager:
                 (session_id, turn, user_text, spoken_response, corrections_json, vocabulary_json, turn_time_ms)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
             """, (session_id, turn,
-                  "user_text", "spoken",
-                  json.dumps(corrections), json.dumps(vocabulary),
-                  turn_time_ms))
+                  user_text, spoken,
+                  json.dumps(corrections, ensure_ascii=False),
+                  json.dumps(vocabulary, ensure_ascii=False),
+                  int(turn_time_ms)))
             conn.commit()
 
 

@@ -24,9 +24,11 @@ REQUISITOS:
 import sys
 import os
 import json
+import csv
 import time
 import signal
 import threading
+import queue
 import numpy as np
 from pathlib import Path
 import collections
@@ -69,8 +71,8 @@ WEB_SEARCH_ENGINE = MEMORY_CONFIG.get("engine", "duckduckgo")
 ENGLISH_PROFICIENCY_THRESHOLD = MEMORY_CONFIG.get("english_proficiency_threshold", 0.5)
 
 # Ollama local - no requiere API key
-OLLAMA_URL = "http://localhost:11434"
-OLLAMA_MODEL = "qwen2.5-coder:7b"
+OLLAMA_URL = LLM_CONFIG.get("ollama_url", "http://localhost:11434")
+OLLAMA_MODEL = LLM_CONFIG.get("ollama_model", "qwen2.5-coder:7b")
 
 LLM_MODELS = [OLLAMA_MODEL]
 TEMPERATURE = LLM_CONFIG.get("temperature", 0.7)
@@ -79,7 +81,9 @@ MAX_HISTORY = HISTORY_CONFIG.get("max_turns", 10)
 STT_MODEL_SIZE = STT_CONFIG.get("model_size", "base")
 STT_DEVICE = STT_CONFIG.get("device", "cuda")
 STT_COMPUTE_TYPE = STT_CONFIG.get("compute_type", "float16")
-STT_LANGUAGE = STT_CONFIG.get("language", "en")
+STT_LANGUAGE = STT_CONFIG.get("language") or None
+STT_BEAM_SIZE = STT_CONFIG.get("beam_size", 1)
+STT_VAD_FILTER = STT_CONFIG.get("vad_filter", True)
 VAD_THRESHOLD = VAD_CONFIG.get("threshold", 0.5)
 VAD_MIN_SILENCE_MS = VAD_CONFIG.get("min_silence_duration_ms", 400)
 VAD_END_SILENCE_MS = VAD_CONFIG.get("end_of_turn_silence_ms", 800)
@@ -231,6 +235,11 @@ print("Cargando TTS (Kokoro)...")
 try:
     from tts_kokoro import KokoroTTS
     tts = KokoroTTS(model_path=TTS_MODEL, voices_path=TTS_VOICES_PATH)
+    tts.voices.update({
+        "en": TTS_ENGLISH_VOICE, "es": TTS_SPANISH_VOICE,
+        "es_male": TTS_CONFIG.get("voices", {}).get("es_male", "em_alex"),
+        "en_male": TTS_CONFIG.get("voices", {}).get("en_male", "am_michael")
+    })
     print("TTS cargado")
 except Exception as e:
     print(f"Error cargando TTS: {e}")
@@ -357,6 +366,18 @@ def select_voice(language: str) -> str:
     else:
         return TTS_SPANISH_VOICE
 
+
+def split_into_sentences(text: str) -> list:
+    """Divide texto en oraciones para TTS streaming."""
+    if not text:
+        return []
+    import re
+    # Separar por . ! ? seguidos de espacio o fin de línea
+    sentences = re.split(r'(?<=[.!?])\s+', text.strip())
+    # Filtrar oraciones vacías
+    return [s.strip() for s in sentences if s.strip()]
+
+
 def save_latency_csv(results: List[TurnResult], csv_path: str = "logs/latency.csv"):
     try:
         os.makedirs("logs", exist_ok=True)
@@ -471,24 +492,87 @@ def record_audio_vad(vad_iterator, stop_event, mic_stream):
     return recorded_chunks, True, peak_rms
 
 def speak_text(text: str, language: str = "es", block: bool = True):
+    """TTS tradicional: genera todo el audio y reproduce (bloqueante opcional)."""
     voice = select_voice(language)
-    
+
     start = time.perf_counter()
     audio = tts.synthesize(text, lang=language)
     first_audio_start = time.perf_counter()
-    
+
     import sounddevice as sd
     sd.play(audio, samplerate=TTS_SAMPLE_RATE)
     if block:
         sd.wait()
-    
+
     end = time.perf_counter()
     tts_duration = (end - start) * 1000
     first_audio_duration = (first_audio_start - start) * 1000
-    
+
     return tts_duration, first_audio_duration, audio
 
-def run_turn(turn_num: int, mic_stream):
+
+class StreamingTTS:
+    """TTS streaming: reproduce oraciones mientras se generan."""
+    
+    def __init__(self, sample_rate=24000):
+        self.sample_rate = sample_rate
+        self.queue = queue.Queue()
+        self.playing = False
+        self.thread = None
+        self.stop_event = threading.Event()
+    
+    def start(self):
+        """Inicia el hilo de reproducción."""
+        self.stop_event.clear()
+        self.playing = True
+        self.thread = threading.Thread(target=self._playback_loop, daemon=True)
+        self.thread.start()
+    
+    def add_text(self, text: str, language: str):
+        """Añade texto a la cola para síntesis y reproducción."""
+        if not text.strip():
+            return
+        self.queue.put((text, language))
+    
+    def stop(self, timeout=5.0):
+        """Detiene la reproducción y espera a que termine."""
+        self.stop_event.set()
+        if self.thread:
+            self.thread.join(timeout=timeout)
+        self.playing = False
+    
+    def wait_until_done(self, timeout=30.0):
+        """Espera a que se reproduzcan todos los audios en cola."""
+        start = time.perf_counter()
+        while not self.queue.empty() or self.playing:
+            if time.perf_counter() - start > timeout:
+                break
+            time.sleep(0.05)
+    
+def _playback_loop(self):
+        """Bucle de reproducci�n: saca texto de cola, sintetiza y reproduce."""
+        try:
+            while not self.stop_event.is_set() or not self.queue.empty():
+                try:
+                    text, language = self.queue.get(timeout=0.1)
+                except queue.Empty:
+                    continue
+
+                try:
+                    voice = select_voice(language)
+                    audio = tts.synthesize(text, lang=language)
+
+                    import sounddevice as sd
+                    sd.play(audio, samplerate=self.sample_rate)
+                    sd.wait()
+                except Exception as e:
+                    print(f"[TTS Streaming] Error: {e}")
+                finally:
+                    self.queue.task_done()
+        finally:
+            self.playing = False
+
+def run_turn(turn_num: int, mic_stream, memoria):
     global stop_loop
     
     print(f"\n{'='*60}")
@@ -517,7 +601,10 @@ def run_turn(turn_num: int, mic_stream):
         timer.start()
         timer.mark_stt()
         
-        user_text, detected_lang, _forced = stt.transcribe(full_audio, language=STT_LANGUAGE)
+        user_text, detected_lang, _forced = stt.transcribe(
+            full_audio, language=STT_LANGUAGE, beam_size=STT_BEAM_SIZE,
+            vad_filter=STT_VAD_FILTER
+        )
         stt_end = time.perf_counter()
         stt_ms = (stt_end - turn_start) * 1000
         
@@ -533,24 +620,24 @@ def run_turn(turn_num: int, mic_stream):
         traceback.print_exc()
         return None
     
-    # --- ETAPA 3: LLM Streaming ---
+# --- ETAPA 3: LLM Streaming ---
     print("3. LLM streaming...")
-    
+
     try:
         system_prompt = get_system_prompt_with_context()
-        
+
         messages = [{"role": "system", "content": system_prompt}]
-        
+
         for ut, ar, al in zip(
-            list(history.user_texts)[-3:], 
-            list(history.assistant_responses)[-3:], 
+            list(history.user_texts)[-3:],
+            list(history.assistant_responses)[-3:],
             list(history.assistant_languages)[-3:]
         ):
             messages.append({"role": "user", "content": ut})
             messages.append({"role": "assistant", "content": ar})
-        
+
         messages.append({"role": "user", "content": user_text})
-        
+
         llm_start = time.perf_counter()
         first_token_time = None
         full_response = ""
@@ -580,7 +667,7 @@ def run_turn(turn_num: int, mic_stream):
         if response.status_code != 200:
             print(f"   [LLM] Error {response.status_code}: {response.text}")
             raise Exception(f"Ollama error {response.status_code}")
-        
+
         for line in response.iter_lines():
             if line:
                 line = line.decode('utf-8')
@@ -595,20 +682,20 @@ def run_turn(turn_num: int, mic_stream):
                         break
                 except json.JSONDecodeError:
                     pass
-        
+
         llm_end = time.perf_counter()
         llm_full_ms = (llm_end - llm_start) * 1000
-        
+
         if first_token_time is None:
             first_token_time = llm_start
         llm_first_token_ms = (first_token_time - llm_start) * 1000
-        
+
         # Parsear respuesta JSON
         corrections = []
         vocabulary = []
         assistant_language = "es"
         spoken = full_response
-        
+
         try:
             json_start = full_response.find('{')
             json_end = full_response.rfind('}') + 1
@@ -622,44 +709,66 @@ def run_turn(turn_num: int, mic_stream):
         except json.JSONDecodeError:
             spoken = full_response
             assistant_language = detect_language(spoken)
-        
+
         print(f"   LLM: '{spoken[:60]}...' ({assistant_language})")
         print(f"   LLM first token: {llm_first_token_ms:.0f}ms, full: {llm_full_ms:.0f}ms")
-        
+
     except Exception as e:
         print(f"Error en LLM: {e}")
         import traceback
         traceback.print_exc()
         return None
-    
-    # --- ETAPA 4: TTS ---
-    print("4. Sintetizando voz con Kokoro...")
-    
+
+    # --- ETAPA 4: TTS Streaming ---
+    print("4. Sintetizando voz con Kokoro (streaming)...")
+
     try:
         tts_start = time.perf_counter()
-        tts_duration, tts_first_ms, audio = speak_text(
-            spoken,
-            language=assistant_language,
-            block=False
-        )
         
-        # Delay post-TTS para que el eco se disipe
-        delay_ms = int(POST_TTS_DELAY_MS)
-        print(f"   Esperando {delay_ms}ms para que el eco se disipe...")
-        time.sleep(delay_ms / 1000)
+        # Inicializar TTS streaming
+        streaming_tts = StreamingTTS(sample_rate=TTS_SAMPLE_RATE)
+        streaming_tts.start()
+        
+        # Dividir respuesta en oraciones y enviar a TTS
+        sentences = split_into_sentences(spoken)
+        if not sentences:
+            sentences = [spoken]
+        
+        print(f"   [TTS] {len(sentences)} oraciones para sintetizar")
+        
+        # Enviar primera oración inmediatamente para empezar síntesis
+        first_sentence = True
+        first_audio_time = None
+        
+        for i, sentence in enumerate(sentences):
+            sentence = sentence.strip()
+            if not sentence:
+                continue
+            
+            print(f"   [TTS] Orando {i+1}/{len(sentences)}: '{sentence[:50]}...'")
+            streaming_tts.add_text(sentence, assistant_language)
+            
+            if first_sentence:
+                first_audio_time = time.perf_counter()
+                first_sentence = False
+        
+        # Esperar a que termine la reproducción
+        streaming_tts.wait_until_done(timeout=60.0)
+        streaming_tts.stop()
         
         tts_end = time.perf_counter()
         tts_ms = (tts_end - tts_start) * 1000
+        tts_first_ms = (first_audio_time - tts_start) * 1000 if first_audio_time else 0
         
         print(f"   TTS: '{spoken[:50]}...' ({assistant_language})")
         print(f"   TTS first audio: {tts_first_ms:.0f}ms, total: {tts_ms:.0f}ms")
-        
+
     except Exception as e:
         print(f"Error en TTS: {e}")
         import traceback
         traceback.print_exc()
         return None
-    
+
     # --- ETAPA 5: Half-duplex pause ---
     print("5. Pausa half-duplex...")
     if HALF_DUPLEX:
@@ -698,120 +807,6 @@ def run_turn(turn_num: int, mic_stream):
     
     return result
 
-def main():
-    global stop_loop, total_turns
-    
-    def signal_handler(signum, frame):
-        global stop_loop
-        print("\nCtrl+C detectado. Finalizando...")
-        stop_loop = True
-    
-    signal.signal(signal.SIGINT, signal_handler)
-    signal.signal(signal.SIGTERM, signal_handler)
-    
-    print("="*60)
-    print("Emma Bilingue - Voice Loop Starting")
-    print("="*60)
-    print(f"Model: {OLLAMA_MODEL} (local Ollama)")
-    print(f"History: {MAX_HISTORY} turns")
-    print(f"VAD threshold: {VAD_THRESHOLD}")
-    print(f"TTS voices: en={TTS_ENGLISH_VOICE}, es={TTS_SPANISH_VOICE}")
-    print(f"Half-duplex: {HALF_DUPLEX}, Post-TTS delay: {POST_TTS_DELAY_MS}ms")
-    print("="*60)
-    print("Speak and the system will transcribe -> LLM -> voice")
-    print("Press Ctrl+C to stop after current turn")
-    print("="*60)
-    
-    os.makedirs("logs", exist_ok=True)
-    
-    # --- Inicializar MicStream una sola vez ---
-    input_device = AUDIO_CONFIG.get("input_device", 1)
-    mic_stream = MicStream(
-        sample_rate=AUDIO_SAMPLE_RATE,
-        block_size=AUDIO_CONFIG.get("block_size", 512),
-        device=input_device,
-        channels=AUDIO_CONFIG.get("channels", 1)
-    )
-    mic_stream.start()
-    
-    turn_num = 0
-    
-    try:
-        while not stop_loop:
-            turn_num += 1
-            if turn_num > 20:
-                print("Limit of 20 turns reached")
-                break
-            
-            try:
-                result = run_turn(turn_num, mic_stream)
-            except Exception as e:
-                print(f"[ERROR] Turno {turn_num} falló: {e}")
-                import traceback
-                traceback.print_exc()
-                print("Continuando con siguiente turno...")
-                continue
-            
-            if result is None:
-                print("Turn incomplete, continuing...")
-                continue
-            
-            # Guardar CSV solo al final o cada N turnos para evitar problemas
-            # save_latency_csv(turn_results, "logs/latency.csv")
-            
-            print("Pause between turns (1s)...")
-            time.sleep(1)
-    except KeyboardInterrupt:
-        print("\nKeyboard interrupt")
-    finally:
-        mic_stream.stop()
-    
-    # ==========================================
-    # Final summary
-    # ==========================================
-    
-    print("\n" + "="*60)
-    print("FINAL SUMMARY - Conversation Ended")
-    print("="*60)
-    
-    if turn_results:
-        avg_stt = sum(r.stt_ms for r in turn_results) / len(turn_results)
-        avg_llm_first = sum(r.llm_first_token_ms for r in turn_results) / len(turn_results)
-        avg_llm_full = sum(r.llm_full_ms for r in turn_results) / len(turn_results)
-        avg_tts_first = sum(r.tts_first_ms for r in turn_results) / len(turn_results)
-        avg_total = sum(r.total_ms for r in turn_results) / len(turn_results)
-        
-        print(f"Total turns: {len(turn_results)}")
-        print(f"   Avg STT:          {avg_stt:.0f}ms")
-        print(f"   Avg LLM first:    {avg_llm_first:.0f}ms")
-        print(f"   Avg LLM full:     {avg_llm_full:.0f}ms")
-        print(f"   Avg TTS first:    {avg_tts_first:.0f}ms")
-        print(f"   Avg TOTAL:        {avg_total:.0f}ms")
-        
-        save_latency_csv(turn_results, "logs/latency.csv")
-        print(f"\nData saved to: logs/latency.csv")
-    else:
-        print("No turns completed")
-    
-    print("\nTurn details:")
-    for r in turn_results:
-        print(f"   Turn {r.turn}: STT={r.stt_ms:.0f}ms LLM1={r.llm_first_token_ms:.0f}ms LLMF={r.llm_full_ms:.0f}ms TTS1={r.tts_first_ms:.0f}ms Tot={r.total_ms:.0f}ms | '{r.user_text[:30]}...' -> '{r.assistant_spoken[:30]}...' ({r.assistant_language})")
-    
-    print("="*60)
-print("Voice Loop ended. Goodbye!")
-print("="*60)
-
-# Cargar memoria persistente si existe
-memoria_emma = []
-historial_path = "memoria_emma.json"
-if os.path.exists(historial_path):
-    try:
-        with open(historial_path, "r", encoding="utf-8") as f:
-            memoria_emma = json.load(f)
-        print(f"Memoria cargada: {len(memoria_emma)} turnos previos")
-    except Exception as e:
-        print(f"[WARN] No se pudo cargar memoria: {e}")
-        memoria_emma = []
 
 def main():
     global stop_loop, total_turns
@@ -942,18 +937,15 @@ def main():
 print("Voice Loop ended. Goodbye!")
 print("="*60)
 
-if __name__ == "__main__":
-    main()
-
 
 def cargar_memoria():
     """Carga la memoria persistente desde memoria_emma.json si existe."""
-    memoria_path = "memoria_emma.json"
+    memoria_path = MEMORY_PATH
     if os.path.exists(memoria_path):
         try:
             with open(memoria_path, "r", encoding="utf-8") as f:
                 memoria = json.load(f)
-            print(f"Memoria cargada: {len(memencia)} turnos previos")
+            print(f"Memoria cargada: {len(memoria)} turnos previos")
             return memoria
         except Exception as e:
             print(f"[WARN] No se pudo cargar memoria: {e}")
@@ -962,10 +954,16 @@ def cargar_memoria():
 
 def guardar_memoria(memoria):
     """Guarda el historial de conversaciones en memoria_emma.json."""
-    memoria_path = "memoria_emma.json"
+    memoria_path = MEMORY_PATH
     try:
-        with open(memoria_path, "w", encoding="utf-8") as f:
+        target = Path(memoria_path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        temp = target.with_suffix(target.suffix + ".tmp")
+        with open(temp, "w", encoding="utf-8") as f:
             json.dump(memoria, f, ensure_ascii=False, indent=4)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(temp, target)
     except Exception as e:
         print(f"[WARN] No se pudo guardar memoria: {e}")
 
@@ -976,11 +974,17 @@ def cambiar_voz(nueva_voz: str):
     if nueva_voz.lower().startswith("en") or nueva_voz == "inglés":
         TTS_ENGLISH_VOICE = "af_bella"
         TTS_SPANISH_VOICE = "af_bella"
-        print("[VOZ] Voz cambiado a inglés (af_bella)")
+        if "tts" in globals():
+            tts.voices["en"] = TTS_ENGLISH_VOICE
+            tts.voices["es"] = TTS_SPANISH_VOICE
+        print("[VOZ] Voz cambiada a inglés (af_bella)")
     elif nueva_voz.lower().startswith("es") or nueva_voz == "español":
         TTS_ENGLISH_VOICE = "af_bella"
         TTS_SPANISH_VOICE = "ef_dora"
-        print("[VOZ] Voz cambiado a español (ef_dora)")
+        if "tts" in globals():
+            tts.voices["en"] = TTS_ENGLISH_VOICE
+            tts.voices["es"] = TTS_SPANISH_VOICE
+        print("[VOZ] Voz cambiada a español (ef_dora)")
     elif nueva_voz.lower().startswith("m") or nueva_voz == "masculino":
         # No hay voz masculina predefinida en Kokoro fácilmente cambiable,
         # pero registramos el cambio para futuras expansiones

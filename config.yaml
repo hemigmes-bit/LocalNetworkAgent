@@ -1,27 +1,25 @@
-# Emma Bilingüe - Configuración del Voice Loop
-# Copia este archivo y ajusta según necesites
-
-# Modelo LLM en OpenRouter (compatible OpenAI chat completions)
 llm:
-  models: ["qwen/qwen-2.5-7b-instruct:free", "meta-llama/llama-3.1-8b-instruct:free", "google/gemma-2-9b-it:free", "microsoft/phi-3-mini-128k-instruct:free", "huggingfaceh4/zephyr-7b-beta:free", "nousresearch/hermes-3-llama-3.1-8b:free"]  # Modelos gratuitos en OpenRouter
+  models:
+  - qwen/qwen-2.5-7b-instruct:free
+  - meta-llama/llama-3.1-8b-instruct:free
+  - google/gemma-2-9b-it:free
+  - microsoft/phi-3-mini-128k-instruct:free
+  - huggingfaceh4/zephyr-7b-beta:free
+  - nousresearch/hermes-3-llama-3.1-8b:free
+  ollama_url: http://localhost:11434
+  ollama_model: qwen2.5-coder:7b
   temperature: 0.7
   max_tokens: 500
-
-# Historial de conversación
 history:
-  max_turns: 10  # N turnos a mantener en contexto
-
-# STT (faster-whisper)
+  max_turns: 10
 stt:
-  model_size: "medium"     # tiny = más rápido, base = más preciso, medium = alta precisión
-  device: "cuda"           # cuda o cpu
-  compute_type: "float16"  # float16, int8_float16, int8
-  language: "en"           # idioma por defecto para transcripción
-  beam_size: 1             # 1 = más rápido, 5 = más preciso
+  model_size: medium
+  device: cuda
+  compute_type: float16
+  language: null
+  beam_size: 1
   vad_filter: true
   min_silence_ms: 500
-
-# VAD (Silero)
 vad:
   threshold: 0.5
   min_silence_duration_ms: 800
@@ -29,56 +27,31 @@ vad:
   speech_pad_ms: 100
   end_of_turn_silence_ms: 800
   min_speech_ms: 400
-
-# TTS (Kokoro)
 tts:
-  model_path: "kokoro-v1.0.onnx"
-  voices_path: "voices-v1.0.bin"
+  model_path: kokoro-v1.0.onnx
+  voices_path: voices-v1.0.bin
   sample_rate: 24000
-  # Voces por idioma (códigos de voces de Kokoro)
   voices:
-    es: "ef_dora"      # Español femenino
-    en: "af_bella"     # Inglés femenino
-    es_male: "em_alex" # Español masculino
-    en_male: "am_michael" # Inglés masculino
-
-# Audio
+    es: ef_dora
+    en: af_bella
+    es_male: em_alex
+    en_male: am_michael
 audio:
   sample_rate: 16000
   channels: 1
   block_size: 512
-  input_device: 1  # Micrófono (Realtek(R) Audio) - device 1 que sí funciona a 16000 Hz
-  # Half-duplex: ignorar micrófono mientras suena el altavoz
+  input_device: 1
   half_duplex: true
-  # Post-TTS delay en ms: tiempo que esperar después de sintetizar voz
-  # antes de volver a abrir el micrófono para que el eco se disipe.
-  # Recomendado: 300-800 ms con auriculares, 500-1500 ms con altavoces.
   post_tts_delay_ms: 500
-
-# Logging
 logging:
-  latency_csv: "logs/latency.csv"
-  level: "INFO"
-
-# Prompt del sistema (tutor de inglés)
-system_prompt: |
-  Eres Emma, tutora bilingüe de inglés/español amable y paciente.
-  
-  REGLAS:
-  1. Responde con frases CORTAS (máx 2-3 oraciones).
-  2. Puedes hablar español si el usuario lo necesita.
-  3. Corrige errores de forma natural y breve.
-  4. Introduce 1-2 palabras nuevas relevantes por turno.
-  5. Mantén un tono conversacional y alentador.
-  
-  FORMATO DE RESPUESTA (JSON obligatorio):
-  {
-    "spoken": "Frase natural que dices en voz alta",
-    "language": "en|es",
-    "corrections": [
-      {"original": "error", "corrected": "corrección", "type": "grammar|vocabulary|pronunciation", "explanation": "breve"}
-    ],
-    "vocabulary": [
-      {"word": "palabra", "translation": "traducción", "example": "ejemplo"}
-    ]
-  }
+  latency_csv: logs/latency.csv
+  level: INFO
+system_prompt: "Eres Emma, tutora bilingüe de inglés/español amable y paciente.\n\n\
+  REGLAS:\n1. Responde con frases CORTAS (máx 2-3 oraciones).\n2. Puedes hablar español\
+  \ si el usuario lo necesita.\n3. Corrige errores de forma natural y breve.\n4. Introduce\
+  \ 1-2 palabras nuevas relevantes por turno.\n5. Mantén un tono conversacional y\
+  \ alentador.\n\nFORMATO DE RESPUESTA (JSON obligatorio):\n{\n  \"spoken\": \"Frase\
+  \ natural que dices en voz alta\",\n  \"language\": \"en|es\",\n  \"corrections\"\
+  : [\n    {\"original\": \"error\", \"corrected\": \"corrección\", \"type\": \"grammar|vocabulary|pronunciation\"\
+  , \"explanation\": \"breve\"}\n  ],\n  \"vocabulary\": [\n    {\"word\": \"palabra\"\
+  , \"translation\": \"traducción\", \"example\": \"ejemplo\"}\n  ]\n}"
