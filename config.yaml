@@ -17,7 +17,7 @@ history:
 conversation:
   max_turns: 500             # limite de turnos por sesion (voz + texto)
 web:
-  enabled: true              # busqueda web bajo demanda (DuckDuckGo + Wikipedia + noticias)
+  enabled: true              # busqueda web bajo demanda (SearXNG + Wikipedia + noticias)
   max_results: 3             # fuentes maximas que se pasan al LLM
   fetch_pages: 1             # paginas completas a descargar (0 = solo fragmentos)
   timeout_s: 7               # limite por peticion HTTP
@@ -26,6 +26,10 @@ web:
   wikipedia: true
   news: true
   extra_trusted_domains: []  # dominios de confianza adicionales
+  search_engine: searxng        # motor principal: searxng | ddgs | bing
+  searxng_url: http://localhost:8080  # instancia local SearXNG (API /search)
+  searxng_categories: general       # categoria por defecto (general, news, science...)
+  searxng_engines: [bing, google, duckduckgo]  # motores probados en orden de preferencia
 song_recognition:
   enabled: true              # reconocer musica grabada (Shazam) y silbidos/tarareos
   seconds: 9                 # segundos que graba tras el aviso de Emma

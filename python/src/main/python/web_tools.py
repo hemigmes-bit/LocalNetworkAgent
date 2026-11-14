@@ -49,6 +49,7 @@ DEFAULTS: Dict[str, Any] = {
     "search_engine": "searxng",
     "searxng_url": "http://localhost:8080",
     "searxng_categories": "general",
+    "searxng_engines": ["bing", "google", "duckduckgo"],
 }
 
 USER_AGENT = (
@@ -1557,53 +1558,64 @@ def _searxng_search(
     if not base_url:
         return []
     language = "en-US" if lang == "en" else "es-ES"
-    params: Dict[str, Any] = {
-        "q": query,
-        "format": "json",
-        "language": language,
-        "categories": cfg.get("searxng_categories") or "general",
-        "safesearch": 0,
-    }
-    engines = cfg.get("searxng_engines")
-    if engines:
-        params["engines"] = engines
-    try:
-        response = requests.get(
-            base_url + "/search",
-            params=params,
-            headers=HEADERS,
-            timeout=timeout,
-        )
-        if response.status_code != 200:
-            return []
-        payload = response.json()
-        items = payload.get("results", []) if isinstance(payload, dict) else []
-        normalized: List[Dict[str, Any]] = []
-        for item in items:
-            if not isinstance(item, dict):
+    default_engines = ["bing", "google", "duckduckgo"]
+    engines = cfg.get("searxng_engines") or default_engines
+    engine_list: List[str] = []
+    for engine in engines:
+        name = str(engine).strip().lower()
+        if name and name not in engine_list:
+            engine_list.append(name)
+    if not engine_list:
+        engine_list = list(default_engines)
+
+    for engine in engine_list:
+        params: Dict[str, Any] = {
+            "q": query,
+            "format": "json",
+            "language": language,
+            "categories": cfg.get("searxng_categories") or "general",
+            "safesearch": 0,
+            "engines": engine,
+        }
+        try:
+            response = requests.get(
+                base_url + "/search",
+                params=params,
+                headers=HEADERS,
+                timeout=timeout,
+            )
+            if response.status_code != 200:
                 continue
-            url = str(item.get("url") or "").strip()
-            title = re.sub(r"\s+", " ", str(item.get("title") or "")).strip()
-            if not url or not title:
-                continue
-            # No se aceptan destinos locales, privados ni esquemas no HTTP.
-            allowed, _ = _url_allowed(url)
-            if not allowed:
-                continue
-            snippet = re.sub(r"\s+", " ", str(item.get("content") or "")).strip()
-            normalized.append({
-                "title": title,
-                "url": url,
-                "snippet": snippet,
-                "site": _site_name(url),
-                "kind": "search",
-                "engine": str(item.get("engine") or "SearXNG"),
-                "published": str(item.get("publishedDate") or ""),
-                "error": "",
-            })
-        return normalized[: max(limit * 3, limit)]
-    except Exception:
-        return []
+            payload = response.json()
+            items = payload.get("results", []) if isinstance(payload, dict) else []
+            normalized: List[Dict[str, Any]] = []
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                url = str(item.get("url") or "").strip()
+                title = re.sub(r"\s+", " ", str(item.get("title") or "")).strip()
+                if not url or not title:
+                    continue
+                # No se aceptan destinos locales, privados ni esquemas no HTTP.
+                allowed, _ = _url_allowed(url)
+                if not allowed:
+                    continue
+                snippet = re.sub(r"\s+", " ", str(item.get("content") or "")).strip()
+                normalized.append({
+                    "title": title,
+                    "url": url,
+                    "snippet": snippet,
+                    "site": _site_name(url),
+                    "kind": "search",
+                    "engine": str(item.get("engine") or engine),
+                    "published": str(item.get("publishedDate") or ""),
+                    "error": "",
+                })
+            if normalized:
+                return normalized[: max(limit * 3, limit)]
+        except Exception:
+            continue
+    return []
 
 
 def search_web(
