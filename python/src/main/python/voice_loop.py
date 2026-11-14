@@ -205,6 +205,13 @@ print(
     f"[VOZ] Perfil: {VOICE_PROFILE_ID} | en={TTS_ENGLISH_VOICE} "
     f"| es={TTS_SPANISH_VOICE} | speed={TTS_SPEED:.2f}"
 )
+USER_NAME = ""
+if EMMA_STATE_AVAILABLE:
+    try:
+        USER_NAME = str(emma_state.get_user_name() or "")
+    except Exception as _user_name_error:
+        USER_NAME = ""
+print(f"[MEM] Nombre del usuario: {USER_NAME or '(no detectado)'}")
 AUDIO_SAMPLE_RATE = AUDIO_CONFIG.get("sample_rate", 16000)
 HALF_DUPLEX = AUDIO_CONFIG.get("half_duplex", True)
 FULL_DUPLEX = bool(AUDIO_CONFIG.get("full_duplex", not HALF_DUPLEX))
@@ -342,6 +349,7 @@ class BargeInDetector:
         self.min_rms = float(min_rms)
         self.frame_ms = 32
         self.rearm()
+        self.push_count = 0
 
     def rearm(self):
         """Reinicia el detector al empezar una frase de Emma."""
@@ -410,6 +418,14 @@ class BargeInDetector:
         else:
             self.frames = []
 
+        self.push_count += 1
+        if self.push_count % 4 == 0:
+            _barge_debug(
+                f"push rms={rms:.4f} voice_ms={self.voice_ms:.0f} "
+                f"loud_ms={self.loud_ms:.0f} thr={threshold_rms:.4f} "
+                f"v_ok={self.voice_ms >= self.min_speech_ms} "
+                f"l_ok={self.loud_ms >= self.min_speech_ms}"
+            )
         return (
             self.voice_ms >= self.min_speech_ms
             and self.loud_ms >= self.min_speech_ms
@@ -679,6 +695,18 @@ UI_EVENTS = queue.Queue()
 ENGINE_STOP_EVENT = threading.Event()
 ENGINE_FINISHED_EVENT = threading.Event()
 
+
+def _barge_debug(msg: str) -> None:
+    """Escribe diagnostico del barge-in a un archivo (no al hidden console)."""
+    try:
+        import os
+
+        os.makedirs("logs", exist_ok=True)
+        with open("logs/bargein_debug.log", "a", encoding="utf-8") as fh:
+            fh.write(f"{time.strftime('%H:%M:%S')} {msg}\n")
+    except Exception:
+        pass
+
 # Mensajes escritos en la ventana. El motor los consume como si fueran voz.
 TEXT_INPUT_QUEUE = queue.Queue()
 TEXT_INPUT_MAX_CHARS = 2000
@@ -874,6 +902,14 @@ def get_system_prompt_with_context(
 
     language_block = build_language_block(LANGUAGE_PREFERENCE, detected_lang)
     context = language_block + "\n\n" + base_prompt
+
+    # Memoria del nombre del usuario: se inyecta en cada prompt para que Emma
+    # se dirija a la persona correcta con el nombre que ella misma declaró.
+    if USER_NAME:
+        context += (
+            f"\n\nMEMORIA DEL USUARIO: el usuario se llama \"{USER_NAME}\". "
+            "Usa ese nombre para dirigirte a él de forma cercana y natural."
+        )
 
     # En modo cuento no arrastramos historial ni perfil: evita que el modelo
     # repita promesas anteriores ("I'll play it") o convierta el cuento en clase.
@@ -1430,6 +1466,7 @@ class LiveSpeech:
         self.sentences = 0
         self.spoken_chars = 0
         self.muted = False
+        self.emitted = False
 
     def feed(self, text: str) -> None:
         if not text or self.muted:
@@ -1465,6 +1502,10 @@ class LiveSpeech:
             if self.first_audio_time is None:
                 self.first_audio_time = time.perf_counter()
             self.stream.add_text(chunk, self.language)
+            # El texto se emite por frases en cuanto se acepta: el usuario debe
+            # poder leerlo en pantalla mientras Emma habla (streaming sincronico).
+            self.emitted = True
+            ui_emit("assistant", chunk)
             self.sentences += 1
 
     def _is_noise(self, text: str) -> bool:
@@ -1552,6 +1593,7 @@ class LiveSpeech:
                 break
 
         if barge_triggered:
+            _barge_debug(f"BARGE_TRIGGER frames={len(barge_frames)}")
             stash_barge_in_audio(barge_frames)
             self.stream.stop(timeout=2.0)
         else:
@@ -2036,7 +2078,7 @@ def handle_song_request(
 
 
 def run_turn(turn_num: int, mic_stream, memoria):
-    global stop_loop, LANGUAGE_PREFERENCE
+    global stop_loop, LANGUAGE_PREFERENCE, USER_NAME
     
     print(f"\n{'='*60}")
     print(f"TURNO {turn_num} INICIANDO")
@@ -2063,6 +2105,7 @@ def run_turn(turn_num: int, mic_stream, memoria):
         # Si el turno nace de una interrupcion, esas palabras ya estan capturadas.
         pending = take_barge_in_audio()
         if pending:
+            _barge_debug(f"BARGE_PENDING frames={len(pending)}")
             print(f"   [FULL DUPLEX] Continúo con {len(pending)} frames ya capturados")
         else:
             mic_stream.flush()
@@ -2080,6 +2123,17 @@ def run_turn(turn_num: int, mic_stream, memoria):
         elif not voice_detected or not recorded_chunks:
             print(f"   No se detecto voz (pico RMS: {peak_rms:.6f})")
             return None
+
+        # Memorizar el nombre del usuario cuando este lo declara ("Me llamo X",
+        # "My name is X", ...) para que la memoria persista entre turnos.
+        if user_text:
+            try:
+                detected_name = emma_state.detect_user_name(user_text)
+                if detected_name and detected_name != USER_NAME:
+                    USER_NAME = str(emma_state.set_user_name(detected_name))
+                    print(f"[MEM] Usuario se llama ahora: {USER_NAME}")
+            except Exception as name_error:
+                print(f"[MEM] Error detectando nombre: {name_error}")
 
     # --- ETAPA 2: Transcripcion (STT) ---
     if user_text:
@@ -2344,7 +2398,9 @@ def run_turn(turn_num: int, mic_stream, memoria):
             assistant_language = LANGUAGE_PREFERENCE or detect_language(spoken)
 
         print(f"   LLM: '{spoken[:60]}...' ({assistant_language})")
-        ui_emit("assistant", spoken)
+        if not speech.emitted:
+            # Sin streaming de frases (respuesta corta o cancelada): emitir completo.
+            ui_emit("assistant", spoken)
         if web_sources:
             ui_emit("sources", json.dumps(web_sources, ensure_ascii=False))
         ui_emit("status", "Emma está hablando…")

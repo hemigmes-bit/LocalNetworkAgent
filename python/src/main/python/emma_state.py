@@ -75,6 +75,7 @@ _DEFAULT_PREFS: Dict[str, Any] = {
     "language_preference": None,  # "en", "es" o None (automatico)
     "voice_profile": _DEFAULT_VOICE_PROFILE,
     "voice_speed": _DEFAULT_VOICE_SPEED,
+    "user_name": "",  # nombre con el que Emma se dirige al usuario
     "updated": "",
 }
 
@@ -188,6 +189,58 @@ def set_language_preference(language: Optional[str]) -> Dict[str, Any]:
     prefs["language_preference"] = language if language in ("en", "es") else None
     save_prefs(prefs)
     return prefs
+
+
+# ---------------------------------------------------------------------------
+# Nombre del usuario
+# ---------------------------------------------------------------------------
+
+def get_user_name() -> Optional[str]:
+    """Devuelve el nombre con el que Emma se dirige al usuario (o None)."""
+    prefs = load_prefs()
+    name = str(prefs.get("user_name") or "").strip()
+    return name or None
+
+
+def set_user_name(name: str) -> Optional[str]:
+    """Guarda el nombre declarado por el usuario ("Me llamo Airman").
+
+    Persiste en ``emma_prefs.json`` para que sobreviva reinicios de Emma.
+    """
+    cleaned = re.sub(r"\s+", " ", str(name or "")).strip().strip(" .,!?¿¡'\"")
+    if len(cleaned) < 2:
+        return get_user_name()
+    prefs = load_prefs()
+    prefs["user_name"] = cleaned
+    save_prefs(prefs)
+    return cleaned
+
+
+_USER_NAME_PATTERNS: List[tuple] = [
+    (re.compile(r"\bmi nombre es\s+([a-záéíóúüññ]{2,})", re.IGNORECASE), False),
+    (re.compile(r"\bme llamo\s+([a-záéíóúüññ]{2,})", re.IGNORECASE), False),
+    (re.compile(r"\bmi apodo es\s+([a-záéíóúüññ]{2,})", re.IGNORECASE), False),
+    (re.compile(r"\bmy name is\s+([a-záéíóúüññ]{2,})", re.IGNORECASE), False),
+    (re.compile(r"\bthe name is\s+([a-záéíóúüññ]{2,})", re.IGNORECASE), False),
+    (re.compile(r"\b(?:i'm|call me|you can call me|i'm called|this is|i am|im)\s+([a-záéíóúüññ]{2,})",
+               re.IGNORECASE), False),
+]
+
+
+def detect_user_name(text: str) -> Optional[str]:
+    """Detecta el nombre propio que el usuario acaba de declarar.
+
+    Devuelve None si no se reconoce ninguna candidata razonable.
+    """
+    if not text or not text.strip():
+        return None
+    for pattern, _unused in _USER_NAME_PATTERNS:
+        match = pattern.search(str(text))
+        if match:
+            candidate = re.sub(r"\s+", " ", match.group(1)).strip(" .,!?¿¡'\"")
+            if len(candidate) >= 2 and not candidate.isdigit():
+                return candidate
+    return None
 
 
 # ---------------------------------------------------------------------------
