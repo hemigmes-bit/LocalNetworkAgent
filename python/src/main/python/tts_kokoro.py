@@ -1,8 +1,29 @@
-"""Wrapper for Kokoro TTS."""
+"""Wrapper for Kokoro TTS.
+
+Kokoro necesita que se le indique el idioma de fonemizacion (``lang``). Antes
+se usaba el valor por defecto ``en-us`` tambien para el espanol, lo que hacia
+que las frases en espanol sonaran con fonemas ingleses. Ahora el idioma se
+deduce de la voz elegida.
+"""
 import numpy as np
 import time
 import os
 from kokoro_onnx import Kokoro
+
+
+# Prefijo de la voz -> idioma que espera el fonemizador de Kokoro.
+_VOICE_LANGS = {
+    "af": "en-us", "am": "en-us",
+    "bf": "en-gb", "bm": "en-gb",
+    "ef": "es", "em": "es",
+    "ff": "fr-fr", "fm": "fr-fr",
+    "hf": "hi", "hm": "hi",
+    "if": "it", "im": "it",
+    "jf": "ja", "jm": "ja",
+    "pf": "pt-br", "pm": "pt-br",
+    "zf": "zh", "zm": "zh",
+}
+
 
 class KokoroTTS:
     def __init__(self, model_path: str = None, voices_path: str = None, output_device: int = None):
@@ -27,11 +48,24 @@ class KokoroTTS:
         # Voces disponibles
         self.voices = {
             "es": "ef_dora",
-            "en": "af_bella",
+            "en": "af_heart",
             "es_male": "em_alex",
             "en_male": "am_michael"
         }
-    
+        # Velocidad global: algo mas lenta que 1.0 suena mas cercana y humana.
+        self.speed = 0.95
+
+    def _voice_lang(self, voice: str, fallback: str = "en-us") -> str:
+        if isinstance(voice, str) and len(voice) >= 2:
+            return _VOICE_LANGS.get(voice[:2], fallback)
+        return fallback
+
+    def available_voices(self):
+        try:
+            return list(self.kokoro.get_voices())
+        except Exception:
+            return []
+
     def _find_headphones_device(self) -> int:
         """Detectar dispositivo de auriculares automáticamente."""
         import sounddevice as sd
@@ -43,13 +77,22 @@ class KokoroTTS:
         except Exception as e:
             print(f"  Error detectando auriculares: {e}, usando default")
             return sd.default.device[1]
-    
-    def synthesize(self, text: str, lang: str = "es") -> np.ndarray:
+
+    def synthesize(self, text: str, lang: str = "es", voice: str = None,
+                   speed: float = None) -> np.ndarray:
         start = time.perf_counter()
-        voice = self.voices.get(lang, self.voices["es"])
-        audio, _ = self.kokoro.create(text, voice=voice, speed=1.0)
+        voice = voice or self.voices.get(lang, self.voices["es"])
+        speed = self.speed if speed is None else float(speed)
+        # El idioma de fonemizacion depende de la voz, no del idioma pedido.
+        voice_lang = self._voice_lang(voice)
+        audio, _ = self.kokoro.create(
+            text, voice=voice, speed=speed, lang=voice_lang
+        )
         elapsed = (time.perf_counter() - start) * 1000
-        print(f"   [TTS] Kokoro: {elapsed:.0f}ms - {len(audio)} samples")
+        print(
+            f"   [TTS] Kokoro: {elapsed:.0f}ms - {len(audio)} samples "
+            f"(voice={voice}, lang={voice_lang}, speed={speed:.2f})"
+        )
         return audio
     
     def play(self, audio: np.ndarray, sample_rate: int = 24000):

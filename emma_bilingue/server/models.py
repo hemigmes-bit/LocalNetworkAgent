@@ -84,6 +84,9 @@ class WSTTSChunkMessage(BaseModel):
     sample_rate: int = 24000
     format: str = "pcm"
     is_final: bool = False
+    # Lip-sync data for VRM avatar
+    amplitude: Optional[float] = None  # 0.0 - 1.0 RMS amplitude
+    vowel: Optional[str] = None        # 'a', 'e', 'i', 'o', 'u' for blendshapes
     timestamp: datetime = Field(default_factory=datetime.now)
     session_id: Optional[str] = None
     turn: Optional[int] = None
