@@ -199,7 +199,9 @@ def get_user_name() -> Optional[str]:
     """Devuelve el nombre con el que Emma se dirige al usuario (o None)."""
     prefs = load_prefs()
     name = str(prefs.get("user_name") or "").strip()
-    return name or None
+    if not name or not is_plausible_name(name):
+        return None
+    return name
 
 
 def set_user_name(name: str) -> Optional[str]:
@@ -208,12 +210,110 @@ def set_user_name(name: str) -> Optional[str]:
     Persiste en ``emma_prefs.json`` para que sobreviva reinicios de Emma.
     """
     cleaned = re.sub(r"\s+", " ", str(name or "")).strip().strip(" .,!?¿¡'\"")
-    if len(cleaned) < 2:
+    if not is_plausible_name(cleaned):
         return get_user_name()
     prefs = load_prefs()
     prefs["user_name"] = cleaned
     save_prefs(prefs)
     return cleaned
+
+
+def clear_user_name() -> None:
+    """Olvida el nombre guardado (p. ej. tras una correccion del usuario)."""
+    prefs = load_prefs()
+    prefs["user_name"] = ""
+    save_prefs(prefs)
+
+
+# Palabras que nunca son un nombre: evitan guardar "not", "fine", "sorry"...
+_NAME_STOPWORDS = {
+    # ingles
+    "a", "an", "the", "and", "or", "but", "if", "so", "to", "of", "in", "on",
+    "at", "by", "for", "with", "from", "up", "down", "out", "off", "over",
+    "not", "no", "yes", "yeah", "yep", "nope", "ok", "okay", "sure", "right",
+    "wrong", "good", "bad", "fine", "great", "nice", "happy", "sad", "tired",
+    "angry", "hungry", "busy", "ready", "done", "here", "there", "where",
+    "when", "what", "why", "how", "who", "which", "this", "that", "these",
+    "those", "it", "its", "is", "are", "was", "were", "be", "been", "being",
+    "am", "do", "does", "did", "have", "has", "had", "can", "could", "will",
+    "would", "should", "may", "might", "must", "my", "your", "his", "her",
+    "our", "their", "me", "you", "him", "us", "them", "i", "we", "they",
+    "she", "he", "please", "thanks", "thank", "sorry", "hello", "hi", "hey",
+    "bye", "goodbye", "now", "later", "again", "back", "still", "just",
+    "only", "also", "too", "very", "really", "much", "more", "less", "all",
+    "any", "some", "none", "never", "always", "sometimes", "maybe", "today",
+    "tomorrow", "yesterday", "morning", "night", "emma", "assistant", "bot",
+    "testing", "test", "joking", "kidding", "serious", "listening", "talking",
+    # espanol
+    "el", "la", "los", "las", "un", "una", "unos", "unas", "de", "del", "al",
+    "y", "o", "pero", "si", "sí", "que", "qué", "como", "cómo", "cuando",
+    "cuándo", "donde", "dónde", "por", "para", "con", "sin", "muy", "mas",
+    "más", "menos", "todo", "todos", "nada", "algo", "bien", "mal", "asi",
+    "así", "vale", "bueno", "buena", "gracias", "hola", "adios", "adiós",
+    "hasta", "luego", "ahora", "despues", "después", "otra", "vez", "tambien",
+    "también", "solo", "sólo", "estoy", "eres", "soy", "es", "son", "esta",
+    "está", "este", "esto", "eso", "esa", "ese", "mi", "mis", "tu", "tus",
+    "su", "sus", "yo", "tú", "él", "ella", "nosotros", "ellos", "ellas",
+    "no", "nunca", "siempre", "quizá", "quizás", "hoy", "mañana", "ayer",
+    "noche", "dia", "día", "casa", "trabajo", "cansado", "cansada", "feliz",
+    "triste", "enfadado", "enfadada", "contento", "contenta", "listo",
+    "lista", "probando", "prueba", "broma", "bromas", "en serio",
+}
+
+# Expresiones que indican que el usuario esta corrigiendo el nombre guardado.
+_NAME_NEGATION_PREFIX = re.compile(
+    r"\b(?:why|who|what|how|when|where|not|never|don'?t|doesn'?t|isn'?t|"
+    r"aren'?t|wrong)\b[^.!?]{0,24}$",
+    re.IGNORECASE,
+)
+
+
+def is_plausible_name(candidate: str) -> bool:
+    """True si la palabra parece un nombre propio y no una palabra comun."""
+    text = str(candidate or "").strip().strip(" .,!?¿¡'\"")
+    if not (2 <= len(text) <= 30):
+        return False
+    if text.isdigit():
+        return False
+    if text.lower() in _NAME_STOPWORDS:
+        return False
+    # Solo letras, espacios, guiones y apostrofes (nombres compuestos).
+    if not re.fullmatch(r"[A-Za-zÁÉÍÓÚÜÑáéíóúüñ' -]+", text):
+        return False
+    # Al menos una letra real; descarta signos sueltos.
+    if not re.search(r"[A-Za-zÁÉÍÓÚÜÑáéíóúüñ]", text):
+        return False
+    return True
+
+
+def detect_name_correction(text: str) -> Optional[str]:
+    """Detecta que el usuario corrige el nombre que Emma tenia guardado.
+
+    Devuelve ``"clear"`` cuando hay que olvidar el nombre actual.
+    """
+    if not text or not str(text).strip():
+        return None
+    t = str(text).lower()
+
+    if re.search(r"\b(?:that'?s|that is|is|it'?s|it is)\s+not\s+my\s+name\b", t):
+        return "clear"
+    if re.search(r"\bno\s+(?:es|era)\s+mi\s+nombre\b", t):
+        return "clear"
+    if re.search(r"\byou(?:'re| are)?\s+(?:calling|call)\s+me\s+(?:wrong|bad)\b", t):
+        return "clear"
+
+    match = re.search(
+        r"\b(?:no me llamo|my name is not|i'?m not|i am not|no soy)\s+"
+        r"([a-záéíóúüñ][a-záéíóúüñ' -]{1,30})",
+        t,
+    )
+    if match:
+        other = match.group(1).strip().split()[0].strip(".,!?¿¡")
+        stored = get_user_name()
+        if stored and other and other.lower() == stored.lower():
+            return "clear"
+    return None
+
 
 
 _USER_NAME_PATTERNS: List[tuple] = [
@@ -226,11 +326,11 @@ _USER_NAME_PATTERNS: List[tuple] = [
     (re.compile(r"\bmy name is\s+([a-záéíóúüñ]{2,})", re.IGNORECASE), False),
     (re.compile(r"\bthe name is\s+([a-záéíóúüñ]{2,})", re.IGNORECASE), False),
     (re.compile(r"\bi am\s+([a-záéíóúüñ]{2,})", re.IGNORECASE), False),
-    (re.compile(r"\bi'm\s+([a-záéíóúüñ]{2,})", re.IGNORECASE), False),
+    (re.compile(r"\bi['’]m\s+([a-záéíóúüñ]{2,})", re.IGNORECASE), False),
     (re.compile(r"\bcall me\s+([a-záéíóúüñ]{2,})", re.IGNORECASE), False),
     (re.compile(r"\byou can call me\s+([a-záéíóúüñ]{2,})", re.IGNORECASE), False),
     (re.compile(r"\bthis is\s+([a-záéíóúüñ]{2,})", re.IGNORECASE), False),
-    (re.compile(r"\bname's\s+([a-záéíóúüñ]{2,})", re.IGNORECASE), False),
+    (re.compile(r"\bname['’]s\s+([a-záéíóúüñ]{2,})", re.IGNORECASE), False),
 ]
 
 
@@ -241,11 +341,15 @@ def detect_user_name(text: str) -> Optional[str]:
     """
     if not text or not text.strip():
         return None
+    raw = str(text)
     for pattern, _unused in _USER_NAME_PATTERNS:
-        match = pattern.search(str(text))
-        if match:
+        for match in pattern.finditer(raw):
+            # "why you call me not" / "don't call me Alex": no es una declaracion.
+            prefix = raw[max(0, match.start() - 34):match.start()]
+            if _NAME_NEGATION_PREFIX.search(prefix):
+                continue
             candidate = re.sub(r"\s+", " ", match.group(1)).strip(" .,!?¿¡'\"")
-            if len(candidate) >= 2 and not candidate.isdigit():
+            if is_plausible_name(candidate):
                 return candidate
     return None
 
@@ -831,6 +935,68 @@ def learning_summary(profile: Optional[Dict[str, Any]] = None, language: str = "
         summary += " Los puntos que más se repiten son: " + "; ".join(focus) + "."
     summary += " Sigue practicando un poco cada día."
     return summary
+
+
+_RECALL_STOPWORDS = {
+    "para", "como", "cuando", "donde", "porque", "sobre", "entre", "desde",
+    "hasta", "tiene", "tengo", "puedo", "quiero", "sabes", "dime", "hazme",
+    "what", "when", "where", "which", "about", "with", "from", "that",
+    "this", "have", "does", "tell", "give", "please", "would", "could",
+    "should", "there", "their", "your", "mine", "will", "just", "like",
+}
+
+
+def recall_memories(
+    query: str, memoria: List[Dict[str, Any]], limit: int = 2
+) -> List[str]:
+    """Recupera turnos antiguos que comparten palabras clave con la pregunta.
+
+    Devuelve lineas listas para inyectar en el prompt; nunca inventa datos.
+    """
+    if not memoria:
+        return []
+    raw = str(query or "")
+    tokens = {
+        t for t in re.findall(r"[a-záéíóúüñ]{4,}", raw.lower())
+        if t not in _RECALL_STOPWORDS
+    }
+    if not tokens:
+        return []
+
+    # Nombres propios mencionados ("Victor", "Madrid"): valen por si solos.
+    proper = {
+        w.lower()
+        for w in re.findall(r"\b[A-ZÁÉÍÓÚÑ][a-záéíóúüñ]{2,}\b", raw)
+    }
+    first_word = re.match(r"\s*([A-Za-zÁÉÍÓÚÑáéíóúñ]+)", raw)
+    if first_word:
+        proper.discard(first_word.group(1).lower())
+
+    scored = []
+    for entry in list(memoria)[-300:]:
+        blob = " ".join(
+            str(entry.get(key) or "") for key in ("usuario", "asistente")
+        ).lower()
+        score = sum(1 for token in tokens if token in blob)
+        has_proper = any(name in blob for name in proper)
+        if score >= 2 or (score >= 1 and has_proper):
+            scored.append((score + (2 if has_proper else 0), entry))
+    scored.sort(key=lambda item: item[0], reverse=True)
+    lines: List[str] = []
+    seen = set()
+    for _score, entry in scored:
+        user_text = " ".join(str(entry.get("usuario") or "").split())[:140]
+        assistant_text = " ".join(str(entry.get("asistente") or "").split())[:140]
+        key = (user_text.lower(), assistant_text.lower())
+        if not user_text or key in seen:
+            continue
+        seen.add(key)
+        lines.append(
+            f'- El usuario dijo: "{user_text}"\n  Emma respondió: "{assistant_text}"'
+        )
+        if len(lines) >= limit:
+            break
+    return lines
 
 
 if __name__ == "__main__":

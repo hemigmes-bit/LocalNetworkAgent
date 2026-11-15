@@ -887,6 +887,7 @@ def get_system_prompt_with_context(
     detected_lang: str = "",
     story: bool = False,
     story_material: str = "",
+    memories: Optional[List[str]] = None,
 ) -> str:
     if not SYSTEM_PROMPT:
         base_prompt = (
@@ -901,6 +902,12 @@ def get_system_prompt_with_context(
     else:
         base_prompt = SYSTEM_PROMPT
 
+    base_prompt += (
+        " Nunca inventes el nombre ni datos personales del usuario: si no los "
+        "sabes, pregúntalos. Si te corrigen el nombre, discúlpate, olvida el "
+        "anterior y usa el correcto a partir de ese momento."
+    )
+
     language_block = build_language_block(LANGUAGE_PREFERENCE, detected_lang)
     context = language_block + "\n\n" + base_prompt
 
@@ -909,7 +916,14 @@ def get_system_prompt_with_context(
     if USER_NAME:
         context += (
             f"\n\nMEMORIA DEL USUARIO: el usuario se llama \"{USER_NAME}\". "
-            "Usa ese nombre para dirigirte a él de forma cercana y natural."
+            f"Llámalo siempre \"{USER_NAME}\" y nunca le pongas otro nombre. "
+            "Si dice que no es su nombre, discúlpate y pregúntale cómo se llama."
+        )
+    else:
+        context += (
+            "\n\nMEMORIA DEL USUARIO: no sabes cómo se llama el usuario. "
+            "Pregúntaselo una vez, con naturalidad. No inventes ningún nombre "
+            "(ni 'Alex', ni 'amigo', ni apodos genéricos)."
         )
 
     # En modo cuento no arrastramos historial ni perfil: evita que el modelo
@@ -919,6 +933,14 @@ def get_system_prompt_with_context(
         context += "\n\nHistorial reciente:\n"
         for i, ut in enumerate(recent):
             context += f"Usuario: {ut}\n"
+
+    # Recuerdos de conversaciones anteriores relevantes para esta pregunta.
+    if memories and not story:
+        context += (
+            "\n\nMEMORIA DE CONVERSACIONES ANTERIORES (úsala solo si viene al caso, "
+            "sin inventar nada que no aparezca aquí):\n"
+            + "\n".join(memories)
+        )
 
     if EMMA_STATE_AVAILABLE and not story:
         try:
@@ -2125,6 +2147,10 @@ def run_turn(turn_num: int, mic_stream, memoria):
         # "My name is X", ...) para que la memoria persista entre turnos.
         if user_text:
             try:
+                if emma_state.detect_name_correction(user_text) == "clear" and USER_NAME:
+                    print(f"[MEM] El usuario corrige: olvido el nombre '{USER_NAME}'")
+                    emma_state.clear_user_name()
+                    USER_NAME = ""
                 detected_name = emma_state.detect_user_name(user_text)
                 if detected_name and detected_name != USER_NAME:
                     USER_NAME = str(emma_state.set_user_name(detected_name))
@@ -2671,9 +2697,13 @@ def main():
 
                     print(f"   Usuario: '{user_text}' (idioma: {detected_lang}, STT: {stt_ms:.0f}ms)")
                     
-                    # Memorizar nombre si lo declara
+                    # Memoria del nombre: primero correcciones, luego declaraciones.
                     if user_text:
                         try:
+                            if emma_state.detect_name_correction(user_text) == "clear" and USER_NAME:
+                                print(f"[MEM] El usuario corrige: olvido el nombre '{USER_NAME}'")
+                                emma_state.clear_user_name()
+                                USER_NAME = ""
                             detected_name = emma_state.detect_user_name(user_text)
                             if detected_name and detected_name != USER_NAME:
                                 USER_NAME = str(emma_state.set_user_name(detected_name))
@@ -2753,9 +2783,18 @@ def main():
                     if web_sources:
                         ui_emit("sources", json.dumps(web_sources, ensure_ascii=False))
 
+                    # Recuerdos relevantes de conversaciones anteriores.
+                    memories = []
+                    if EMMA_STATE_AVAILABLE:
+                        try:
+                            memories = emma_state.recall_memories(user_text, memoria)
+                        except Exception as recall_error:
+                            print(f"[MEM] Error recuperando recuerdos: {recall_error}")
+
                     # Construir prompt
                     system_prompt = get_system_prompt_with_context(
-                        user_text, active_language, story=story_mode, story_material=story_material
+                        user_text, active_language, story=story_mode,
+                        story_material=story_material, memories=memories
                     )
                     
                     messages = [{"role": "system", "content": system_prompt}]
