@@ -1920,8 +1920,6 @@ def handle_voice_request(
     stt_ms: float,
     user_language: str,
     active_language: str,
-    turn_num: int,
-    turn_start: float,
 ):
     """Cambia la voz si el usuario lo pide, sin pasar por el LLM."""
     if not EMMA_STATE_AVAILABLE:
@@ -2001,9 +1999,7 @@ def handle_song_request(
     stt_ms: float,
     user_language: str,
     active_language: str,
-    turn_num: int,
     mic_stream,
-    turn_start: float,
 ):
     """Graba unos segundos, identifica la cancion y responde sin pasar por el LLM."""
     if not SONG_ENABLED or song_recognizer is None:
@@ -2188,8 +2184,6 @@ def run_turn(turn_num: int, mic_stream, memoria):
             stt_ms,
             user_language,
             active_language,
-            turn_num,
-            turn_start,
         )
         if voice_result is not None:
             return voice_result
@@ -2201,9 +2195,7 @@ def run_turn(turn_num: int, mic_stream, memoria):
                 stt_ms,
                 user_language,
                 active_language,
-                turn_num,
                 mic_stream,
-                turn_start,
             )
             if song_result is not None:
                 return song_result
@@ -2488,7 +2480,7 @@ def run_turn(turn_num: int, mic_stream, memoria):
 
 
 def main():
-    global stop_loop, total_turns, ACTIVE_MIC_STREAM
+    global stop_loop, total_turns, ACTIVE_MIC_STREAM, USER_NAME, LANGUAGE_PREFERENCE
     
     def signal_handler(signum, frame):
         global stop_loop
@@ -2500,16 +2492,16 @@ def main():
         signal.signal(signal.SIGTERM, signal_handler)
     
     print("="*60)
-    print("Emma Bilingue - Voice Loop Starting")
+    print("Emma Bilingue - Full Duplex Continuous Mode")
     print("="*60)
     print(f"Model: {OLLAMA_MODEL} (local Ollama)")
     print(f"History: {MAX_HISTORY} turns")
     print(f"VAD threshold: {VAD_THRESHOLD}")
     print(f"TTS voices: en={TTS_ENGLISH_VOICE}, es={TTS_SPANISH_VOICE} (perfil {VOICE_PROFILE_ID}, speed {TTS_SPEED:.2f})")
-    print(f"Modo: {'full-duplex (barge-in)' if FULL_DUPLEX else 'half-duplex'}, Post-TTS delay: {POST_TTS_DELAY_MS}ms")
+    print(f"Modo: full-duplex continuo, barge-in activo")
     print("="*60)
-    print("Speak and the system will transcribe -> LLM -> voice")
-    print("Press Ctrl+C to stop after current turn")
+    print("Habla cuando quieras. Emma escucha siempre.")
+    print("Presiona Ctrl+C para parar.")
     print("="*60)
     
     os.makedirs("logs", exist_ok=True)
@@ -2528,73 +2520,391 @@ def main():
     mic_stream.start()
     ACTIVE_MIC_STREAM = mic_stream
     
-    turn_num = 0
-
     # Precarga en segundo plano las fuentes narrativas curadas para cuentos.
     def _prefetch_story_sources_task() -> None:
         try:
             web_tools.prefetch_story_sources(langs=("es", "en"))
         except Exception as prefetch_error:
             print(f"[CUENTO] Precarga de fuentes fallo: {prefetch_error}")
-
+    
     _prefetch_thread = threading.Thread(
         target=_prefetch_story_sources_task, daemon=True
     )
     _prefetch_thread.start()
-
+    
+    # Variables de estado continuo
+    conversation_active = False
+    current_speech = None
+    current_producer = None
+    cancel_event = threading.Event()
+    done_event = threading.Event()
+    holder = {}
+    
+    # VAD iterator for continuous listening
+    vad_iter = VADIterator(
+        vad_model,
+        threshold=VAD_THRESHOLD,
+        sampling_rate=STT_CONFIG.get("sample_rate", 16000),
+        min_silence_duration_ms=VAD_MIN_SILENCE_MS
+    )
+    
+    # Barge-in detector (se reusa el mismo)
+    detector = BARGE_IN_DETECTOR
+    
+    print("\n[FULL DUPLEX] Motor continuo iniciado. Di algo...")
+    ui_emit("status", "Escuchando…")
+    
+    # Buffer para acumular audio del usuario
+    user_audio_buffer = []
+    speech_started = False
+    last_vad_activity = 0
+    VAD_SILENCE_MS = VAD_END_SILENCE_MS  # 1400ms por config
+    FRAME_MS = 32
+    
     try:
         while not stop_loop and not ENGINE_STOP_EVENT.is_set():
-            turn_num += 1
-            if ENGINE_STOP_EVENT.is_set():
-                break
-            if turn_num > MAX_CONVERSATION_TURNS:
-                print(f"Limite de {MAX_CONVERSATION_TURNS} turnos alcanzado")
-                break
-            
-            try:
-                result = run_turn(turn_num, mic_stream, memoria)
-            except Exception as e:
-                print(f"[ERROR] Turno {turn_num} falló: {e}")
-                import traceback
-                traceback.print_exc()
-                print("Continuando con siguiente turno...")
-                # Guardar memoria aunque fallen los turns
-                if MEMORY_ENABLED:
-                    guardar_memoria(memoria)
+            # Leer frame del micrófono (siempre escuchando)
+            frame = mic_stream.read(timeout=0.1)
+            if frame is None:
                 continue
             
-            if ENGINE_STOP_EVENT.is_set():
-                break
-            if result is None:
-                print("Turn incomplete, continuing...")
-                # Guardar memoria aún si el turno está incompleto
-                if MEMORY_ENABLED:
-                    # Añadir entrada vacía o skip
-                    pass
+            x = frame[:, 0] if frame.ndim == 2 else frame
+            
+            # Si Emma está hablando, vigilar barge-in
+            if current_speech and current_speech.stream.playback_started.is_set():
+                if detector and BARGE_IN_ENABLED:
+                    if current_speech.stream.playback_epoch != getattr(current_speech, '_barge_epoch', 0):
+                        current_speech._barge_epoch = current_speech.stream.playback_epoch
+                        detector.rearm()
+                    
+                    if detector.push(x):
+                        print("   [FULL DUPLEX] Barge-in detectado: usuario interrumpe")
+                        cancel_event.set()
+                        if current_speech:
+                            current_speech.stream.interrupt()
+                        # Guardar frames del barge-in para procesar
+                        barge_frames = detector.take_frames()
+                        if barge_frames:
+                            stash_barge_in_audio(barge_frames)
+                            _barge_debug(f"BARGE_TRIGGER frames={len(barge_frames)}")
+                        current_speech = None
+                        if current_producer:
+                            current_producer.join(timeout=2.0)
+                            current_producer = None
+                        conversation_active = False
+                        vad_iter.reset_states()
+                        ui_emit("status", "Te escucho…")
+                        continue
+                time.sleep(0.01)
                 continue
             
-            # Guardar memoria después de cada turno exitoso
-            if MEMORY_ENABLED:
-                memoria.append({
-                    "turno": result.turn,
-                    "usuario": result.user_text,
-                    "asistente": result.assistant_spoken,
-                    "idioma_usuario": result.user_language,
-                    "marcas_voz": result.corrections if result.corrections else [],
-                    "aprendizaje": result.learning if result.learning else {},
-                })
-                guardar_memoria(memoria)
+            # Procesar VAD para detectar voz del usuario
+            ev = vad_iter(x, return_seconds=False)
+            rms = float(np.sqrt(np.mean(x ** 2))) if x.size else 0.0
             
-            # Guardar CSV al final (solo si hay resultados acumulados)
-            # save_latency_csv(turn_results, "logs/latency.csv")
+            if ev:
+                last_vad_activity = time.perf_counter()
+                if "start" in ev:
+                    if not speech_started:
+                        speech_started = True
+                        user_audio_buffer = []
+                        print("   [VAD] Inicio de voz detectado")
+                elif "end" in ev and speech_started:
+                    speech_started = False
+                    print("   [VAD] Fin de voz detectado")
             
-            if not has_typed_text():
-                print("Pause between turns...")
-                ui_emit("status", "Preparada para escucharte…")
-                # Full duplex: el respiro minimo es suficiente; no hace falta
-                # la pausa de half-duplex de un segundo.
-                pause_s = 0.2 if FULL_DUPLEX else 1.0
-                ENGINE_STOP_EVENT.wait(pause_s)
+            if speech_started:
+                user_audio_buffer.append(x.copy())
+            
+            # Detectar silencio prolongado tras fin de voz -> procesar
+            if not speech_started and user_audio_buffer:
+                silence_duration = (time.perf_counter() - last_vad_activity) * 1000
+                if silence_duration >= VAD_SILENCE_MS:
+                    # Procesar lo que dijo el usuario
+                    full_audio = np.concatenate(user_audio_buffer).astype(np.float32)
+                    user_audio_buffer = []
+                    
+                    if len(full_audio) * 1000 / AUDIO_SAMPLE_RATE < 400:  # MIN_SPEECH_MS
+                        print("   [VAD] Muy corto, descartado")
+                        vad_iter.reset_states()
+                        continue
+                    
+                    # Transcribir
+                    ui_emit("status", "Procesando tu voz…")
+                    print("   [STT] Transcribiendo...")
+                    stt_start = time.perf_counter()
+                    user_text, detected_lang, _forced = stt.transcribe(
+                        full_audio, language=STT_LANGUAGE, beam_size=STT_BEAM_SIZE,
+                        vad_filter=STT_VAD_FILTER, fallback_languages=STT_FALLBACK_LANGUAGES
+                    )
+                    stt_ms = (time.perf_counter() - stt_start) * 1000
+                    
+                    if not user_text or user_text.strip() == "":
+                        print("   [STT] Transcripción vacía")
+                        vad_iter.reset_states()
+                        continue
+                    
+                    print(f"   Usuario: '{user_text}' (idioma: {detected_lang}, STT: {stt_ms:.0f}ms)")
+                    
+                    # Memorizar nombre si lo declara
+                    if user_text:
+                        try:
+                            detected_name = emma_state.detect_user_name(user_text)
+                            if detected_name and detected_name != USER_NAME:
+                                USER_NAME = str(emma_state.set_user_name(detected_name))
+                                print(f"[MEM] Usuario se llama ahora: {USER_NAME}")
+                        except Exception as name_error:
+                            print(f"[MEM] Error detectando nombre: {name_error}")
+                    
+                    ui_emit("user", user_text)
+                    
+                    # Procesar petición de voz/canción (respuestas directas)
+                    voice_result = handle_voice_request(
+                        user_text, stt_ms, detected_lang, 
+                        LANGUAGE_PREFERENCE or detected_lang, 0, time.perf_counter()
+                    )
+                    if voice_result is not None:
+                        vad_iter.reset_states()
+                        continue
+                    
+                    if SONG_ENABLED:
+                        song_result = handle_song_request(
+                            user_text, stt_ms, detected_lang,
+                            LANGUAGE_PREFERENCE or detected_lang, mic_stream
+                        )
+                        if song_result is not None:
+                            vad_iter.reset_states()
+                            continue
+                    
+                    # Preparar respuesta LLM + TTS streaming
+                    conversation_active = True
+                    cancel_event.clear()
+                    done_event.clear()
+                    holder.clear()
+                    
+                    # Detectar si es cuento
+                    story_mode = is_story_request(user_text)
+                    active_language = LANGUAGE_PREFERENCE or detected_lang
+                    
+                    # Buscar material si es cuento
+                    story_material = ""
+                    web_sources = []
+                    if story_mode:
+                        print("   [CUENTO] Buscando material curado...")
+                        ui_emit("status", "Buscando material para el cuento…")
+                        if WEB_ENABLED:
+                            try:
+                                story_context = web_tools.gather_story_context(
+                                    user_text, lang=active_language, config=WEB_CONFIG
+                                )
+                                if story_context and story_context.get("sources"):
+                                    story_material = web_tools.build_story_prompt_block(story_context)
+                                    web_sources = story_context["sources"]
+                                    first_source = web_sources[0]
+                                    print(f"   [CUENTO] Fuente: {first_source['site']} - {first_source['title']}")
+                                else:
+                                    print("   [CUENTO] Sin material curado")
+                            except Exception as story_error:
+                                print(f"   [CUENTO] Error: {story_error}")
+                    
+                    # Contexto web normal
+                    if WEB_ENABLED and not story_mode and web_tools.should_search(user_text):
+                        print("   [WEB] Consultando fuentes...")
+                        ui_emit("status", "Consultando fuentes…")
+                        try:
+                            web_context = web_tools.gather_context(
+                                user_text, lang=detected_lang,
+                                previous=(history.user_texts[-1] if history.user_texts else ""),
+                                config=WEB_CONFIG
+                            )
+                            if web_context and web_context.get("sources"):
+                                web_sources = web_context["sources"]
+                                print(f"   [WEB] {len(web_sources)} fuentes")
+                        except Exception as web_error:
+                            print(f"   [WEB] Error: {web_error}")
+                    
+                    # Construir prompt
+                    system_prompt = get_system_prompt_with_context(
+                        user_text, active_language, story=story_mode, story_material=story_material
+                    )
+                    
+                    messages = [{"role": "system", "content": system_prompt}]
+                    for ut, ar, al in zip(
+                        list(history.user_texts)[-3:],
+                        list(history.assistant_responses)[-3:],
+                        list(history.assistant_languages)[-3:]
+                    ):
+                        messages.append({"role": "user", "content": ut})
+                        messages.append({"role": "assistant", "content": ar})
+                    messages.append({"role": "user", "content": user_text})
+                    
+                    # Iniciar LLM + TTS streaming
+                    payload = {
+                        "model": OLLAMA_MODEL,
+                        "messages": messages,
+                        "stream": True,
+                        "format": LLM_RESPONSE_SCHEMA,
+                        "keep_alive": LLM_KEEP_ALIVE,
+                        "options": {
+                            "temperature": TEMPERATURE,
+                            "num_predict": STORY_FIRST_PASS_TOKENS if story_mode else MAX_TOKENS,
+                            "num_ctx": LLM_NUM_CTX,
+                        },
+                    }
+                    
+                    current_speech = LiveSpeech(active_language, story_mode=story_mode)
+                    
+                    def producer_target():
+                        try:
+                            first = _stream_ollama_chat(payload, current_speech, cancel_event)
+                            holder.update(first)
+                            holder["passes"] = 1
+                            
+                            if cancel_event.is_set():
+                                return
+                            
+                            if story_mode:
+                                spoken = clean_story_text(extract_spoken_text(first.get("full", "")))
+                                print(f"   [CUENTO] {len(spoken.split())} palabras (primera pasada)")
+                                current_speech.flush(force=False)
+                                
+                                attempts = 0
+                                while (
+                                    len(spoken.split()) < get_self_adjustment("story_min_final_words", 340)
+                                    and attempts < int(get_self_adjustment("story_continuation_attempts", 2))
+                                    and not cancel_event.is_set()
+                                ):
+                                    attempts += 1
+                                    continuation = build_continuation_payload(
+                                        spoken, active_language, num_predict=900, stream=True
+                                    )
+                                    part = _stream_ollama_chat(continuation, current_speech, cancel_event)
+                                    holder["full_s"] = holder.get("full_s", 0.0) + part.get("full_s", 0.0)
+                                    holder["passes"] = holder.get("passes", 1) + 1
+                                    extra = clean_story_text(extract_spoken_text(part.get("full", "")))
+                                    if not extra:
+                                        break
+                                    max_extra = max(90, 340 - len(spoken.split()) + 30)
+                                    words = extra.split()
+                                    has_ending = any(marker in extra.lower() for marker in _STORY_END_MARKERS)
+                                    if len(words) > max_extra and not has_ending:
+                                        cut = " ".join(words[:max_extra])
+                                        last_stop = max(cut.rfind(". "), cut.rfind("! "), cut.rfind("? "))
+                                        if last_stop > 0:
+                                            cut = cut[:last_stop + 1]
+                                        extra = cut
+                                    last_sentence = re.split(r"(?<=[.!?])\s+", spoken.strip())[-1].strip()
+                                    if last_sentence and extra.startswith(last_sentence):
+                                        extra = extra[len(last_sentence):].lstrip()
+                                    spoken = (spoken.rstrip() + "\n\n" + extra).strip()
+                                    current_speech.flush(force=False)
+                                    if any(marker in extra.lower() for marker in _STORY_END_MARKERS):
+                                        break
+                                holder["story_spoken"] = clean_story_text(spoken)
+                            
+                            if not cancel_event.is_set():
+                                current_speech.flush(force=True)
+                        finally:
+                            done_event.set()
+                    
+                    current_producer = threading.Thread(target=producer_target, daemon=True)
+                    current_producer.start()
+                    
+                    ui_emit("status", "Emma está hablando…")
+                    
+                    # Esperar a que termine el TTS (play_until vigila barge-in internamente)
+                    barge_happened = current_speech.play_until(done_event=done_event, cancel_event=cancel_event)
+                    current_producer.join(timeout=10.0)
+                    
+                    full_response = holder.get("full", "")
+                    llm_error = holder.get("error", "")
+                    
+                    if llm_error and not full_response:
+                        print(f"   [LLM] Error: {llm_error}")
+                        vad_iter.reset_states()
+                        conversation_active = False
+                        current_speech = None
+                        continue
+                    
+                    # Parsear respuesta
+                    try:
+                        json_start = full_response.find('{')
+                        json_end = full_response.rfind('}') + 1
+                        if json_start >= 0 and json_end > json_start:
+                            parsed = json.loads(full_response[json_start:json_end])
+                            spoken = parsed.get("spoken", full_response)
+                            corrections = parsed.get("corrections", []) or []
+                            vocabulary = parsed.get("vocabulary", []) or []
+                            learning = parsed.get("learning") or {}
+                            if not isinstance(learning, dict):
+                                learning = {}
+                            assistant_language = LANGUAGE_PREFERENCE or detect_language(spoken)
+                        else:
+                            spoken = extract_spoken_text(full_response)
+                            corrections = []
+                            vocabulary = []
+                            learning = {}
+                            assistant_language = LANGUAGE_PREFERENCE or detect_language(spoken)
+                    except json.JSONDecodeError:
+                        spoken = extract_spoken_text(full_response)
+                        corrections = []
+                        vocabulary = []
+                        learning = {}
+                        assistant_language = LANGUAGE_PREFERENCE or detect_language(spoken)
+                    
+                    if story_mode:
+                        spoken = clean_story_text(holder.get("story_spoken") or spoken)
+                    
+                    if not isinstance(spoken, str) or not spoken.strip():
+                        spoken = extract_spoken_text(full_response)
+                    if not isinstance(spoken, str) or not spoken.strip():
+                        print("   [LLM] Respuesta vacía")
+                        vad_iter.reset_states()
+                        conversation_active = False
+                        current_speech = None
+                        continue
+                    
+                    if LANGUAGE_PREFERENCE and assistant_language != LANGUAGE_PREFERENCE:
+                        assistant_language = LANGUAGE_PREFERENCE
+                    if story_mode and not LANGUAGE_PREFERENCE:
+                        assistant_language = active_language
+                    elif not story_mode:
+                        assistant_language = LANGUAGE_PREFERENCE or detect_language(spoken)
+                    
+                    print(f"   Emma: '{spoken[:60]}...' ({assistant_language})")
+                    if web_sources:
+                        ui_emit("sources", json.dumps(web_sources, ensure_ascii=False))
+                    
+                    # Guardar en historial y memoria
+                    add_turn_to_history(user_text, spoken, assistant_language)
+                    if MEMORY_ENABLED:
+                        memoria.append({
+                            "turno": len(memoria) + 1,
+                            "usuario": user_text,
+                            "asistente": spoken,
+                            "idioma_usuario": detected_lang,
+                            "marcas_voz": corrections,
+                            "aprendizaje": learning,
+                        })
+                        guardar_memoria(memoria)
+                    
+                    # Registrar en perfil de aprendizaje
+                    if EMMA_STATE_AVAILABLE:
+                        try:
+                            profile = emma_state.load_learning()
+                            emma_state.record_turn(profile, corrections=corrections, learning=learning,
+                                                  user_text=user_text, assistant_text=spoken)
+                        except Exception as pe:
+                            print(f"   [PERFIL] Error: {pe}")
+                    
+                    vad_iter.reset_states()
+                    conversation_active = False
+                    current_speech = None
+                    ui_emit("status", "Escuchando…")
+            
+            # Pequeño sleep para no saturar CPU
+            time.sleep(0.005)
+    
     except KeyboardInterrupt:
         print("\nKeyboard interrupt")
     finally:
@@ -2602,7 +2912,6 @@ def main():
         ENGINE_FINISHED_EVENT.set()
         ui_emit("status", "Emma se ha detenido.")
     
-    # Guardar memoria final y reporte
     if MEMORY_ENABLED and memoria:
         guardar_memoria(memoria)
         print(f"\nMemoria guardada: {len(memoria)} turnos en {MEMORY_PATH}")
@@ -2919,14 +3228,44 @@ class ConversationWindow:
             bg=card_bg, fg=accent, font=("Segoe UI", 8, "bold"),
             anchor="w",
         ).pack(fill="x", padx=14, pady=(9, 2))
-        body_label = tk.Label(
-            card, text=message, bg=card_bg, fg=card_fg,
-            font=body_font, justify="left", anchor="w",
-            wraplength=self._card_wraplength(width, kind),
-            padx=14, pady=0,
+        
+        # Text widget de solo lectura: permite seleccionar y copiar, no editar
+        body_text = tk.Text(
+            card, bg=card_bg, fg=card_fg,
+            font=body_font, wrap="word",
+            padx=14, pady=4,
+            borderwidth=0, highlightthickness=0,
+            height=1,  # se ajusta después
         )
-        body_label.pack(fill="x", pady=(0, 10))
-        self._message_cards.append((card, body_label, kind))
+        body_text.insert("1.0", message)
+        body_text.configure(state="disabled")  # solo lectura, pero seleccionable
+        body_text.pack(fill="x", pady=(0, 10))
+        # Ajustar altura al contenido
+        body_text.update_idletasks()
+        lines = int(body_text.index("end-1c").split(".")[0])
+        body_text.configure(height=max(1, lines))
+        
+        # Menú contextual: copiar
+        def _copy_text(event=None):
+            try:
+                body_text.configure(state="normal")
+                body_text.event_generate("<<Copy>>")
+                body_text.configure(state="disabled")
+            except Exception:
+                pass
+        body_text.bind("<Button-3>", lambda e: _show_context_menu(e, body_text))
+        body_text.bind("<Control-c>", _copy_text)
+        body_text.bind("<Command-c>", _copy_text)
+        
+        def _show_context_menu(event, widget):
+            menu = tk.Menu(widget, tearoff=0)
+            menu.add_command(label="Copiar", command=lambda: _copy_text())
+            try:
+                menu.tk_popup(event.x_root, event.y_root)
+            finally:
+                menu.grab_release()
+        
+        self._message_cards.append((card, body_text, kind))
         self.canvas.update_idletasks()
         self.canvas.configure(scrollregion=self.canvas.bbox("all"))
         self.canvas.yview_moveto(1.0)

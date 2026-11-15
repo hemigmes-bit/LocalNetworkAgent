@@ -217,13 +217,20 @@ def set_user_name(name: str) -> Optional[str]:
 
 
 _USER_NAME_PATTERNS: List[tuple] = [
-    (re.compile(r"\bmi nombre es\s+([a-záéíóúüññ]{2,})", re.IGNORECASE), False),
-    (re.compile(r"\bme llamo\s+([a-záéíóúüññ]{2,})", re.IGNORECASE), False),
-    (re.compile(r"\bmi apodo es\s+([a-záéíóúüññ]{2,})", re.IGNORECASE), False),
-    (re.compile(r"\bmy name is\s+([a-záéíóúüññ]{2,})", re.IGNORECASE), False),
-    (re.compile(r"\bthe name is\s+([a-záéíóúüññ]{2,})", re.IGNORECASE), False),
-    (re.compile(r"\b(?:i'm|call me|you can call me|i'm called|this is|i am|im)\s+([a-záéíóúüññ]{2,})",
-               re.IGNORECASE), False),
+    # Español
+    (re.compile(r"\bmi nombre es\s+([a-záéíóúüñ]{2,})", re.IGNORECASE), False),
+    (re.compile(r"\bme llamo\s+([a-záéíóúüñ]{2,})", re.IGNORECASE), False),
+    (re.compile(r"\bmi apodo es\s+([a-záéíóúüñ]{2,})", re.IGNORECASE), False),
+    (re.compile(r"\bsoy\s+([a-záéíóúüñ]{2,})", re.IGNORECASE), False),
+    # Inglés
+    (re.compile(r"\bmy name is\s+([a-záéíóúüñ]{2,})", re.IGNORECASE), False),
+    (re.compile(r"\bthe name is\s+([a-záéíóúüñ]{2,})", re.IGNORECASE), False),
+    (re.compile(r"\bi am\s+([a-záéíóúüñ]{2,})", re.IGNORECASE), False),
+    (re.compile(r"\bi'm\s+([a-záéíóúüñ]{2,})", re.IGNORECASE), False),
+    (re.compile(r"\bcall me\s+([a-záéíóúüñ]{2,})", re.IGNORECASE), False),
+    (re.compile(r"\byou can call me\s+([a-záéíóúüñ]{2,})", re.IGNORECASE), False),
+    (re.compile(r"\bthis is\s+([a-záéíóúüñ]{2,})", re.IGNORECASE), False),
+    (re.compile(r"\bname's\s+([a-záéíóúüñ]{2,})", re.IGNORECASE), False),
 ]
 
 
