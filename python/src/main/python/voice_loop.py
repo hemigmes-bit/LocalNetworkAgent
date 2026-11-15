@@ -3536,7 +3536,6 @@ def run_engine():
         ui_emit("status", f"Error de Emma: {exc}")
         ENGINE_FINISHED_EVENT.set()
 
-
 def cargar_memoria():
     """Carga la memoria persistente desde memoria_emma.json si existe."""
     memoria_path = MEMORY_PATH
@@ -3610,7 +3609,32 @@ def consultar_memoria(texto_usuario: str) -> str:
 memoria_emma = cargar_memoria()
 historial_path = "memoria_emma.json"
 
+_INSTANCE_LOCK = None
+
+
+def acquire_single_instance(port: int = 52183) -> bool:
+    """Impide dos Emma simultaneas (oirian y repetirian todo por duplicado)."""
+    global _INSTANCE_LOCK
+    import socket
+
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        sock.bind(("127.0.0.1", port))
+        sock.listen(1)
+        _INSTANCE_LOCK = sock
+        return True
+    except OSError:
+        try:
+            sock.close()
+        except Exception:
+            pass
+        return False
+
+
 if __name__ == "__main__":
+    if not acquire_single_instance():
+        print("[EMMA] Ya hay otra instancia de Emma en marcha. Cerrando esta.")
+        sys.exit(0)
     try:
         conversation_window = ConversationWindow()
         engine_thread = threading.Thread(target=run_engine, name="EmmaEngine", daemon=True)
