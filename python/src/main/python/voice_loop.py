@@ -110,6 +110,23 @@ LANGUAGE_PREFERENCE = (
 )
 print(f"[IDIOMA] Preferencia guardada: {LANGUAGE_PREFERENCE or 'automática'}")
 
+# "adaptive" (por defecto): Emma responde en el idioma en que le hablas en ese
+# turno. "lock": obliga siempre el idioma guardado, aunque le hables en otro.
+LANGUAGE_MODE = str(CONVERSATION_CONFIG.get("language_mode", "adaptive")).lower()
+if LANGUAGE_MODE not in ("adaptive", "lock"):
+    LANGUAGE_MODE = "adaptive"
+
+
+def resolve_turn_language(requested: Optional[str], detected: str) -> str:
+    """Idioma con el que Emma debe contestar en este turno."""
+    if requested in ("en", "es"):
+        return requested
+    if LANGUAGE_MODE == "adaptive":
+        if detected in ("en", "es"):
+            return detected
+        return LANGUAGE_PREFERENCE or detected or "es"
+    return LANGUAGE_PREFERENCE or detected or "es"
+
 # Esquema JSON que Ollama impone al modelo: evita respuestas a medias y
 # garantiza que el perfil de aprendizaje reciba siempre sus campos.
 LLM_RESPONSE_SCHEMA = {
@@ -167,6 +184,8 @@ OLLAMA_MODEL = LLM_CONFIG.get("ollama_model", "qwen2.5:7b-instruct")
 
 LLM_MODELS = [OLLAMA_MODEL]
 TEMPERATURE = LLM_CONFIG.get("temperature", 0.7)
+TOP_P = float(LLM_CONFIG.get("top_p", 0.9))
+REPEAT_PENALTY = float(LLM_CONFIG.get("repeat_penalty", 1.08))
 MAX_TOKENS = LLM_CONFIG.get("max_tokens", 500)
 STORY_MAX_TOKENS = int(LLM_CONFIG.get("story_max_tokens", 1400))
 STORY_FIRST_PASS_TOKENS = int(LLM_CONFIG.get("story_first_pass_tokens", 500))
@@ -803,6 +822,20 @@ def detect_language(text: str) -> str:
             return history.assistant_languages[-1]
         return "es"
 
+def answer_language(
+    active_language: str, spoken: str, model_language: Optional[str] = None
+) -> str:
+    """Idioma final de la respuesta: el del turno salvo que el texto lo desmienta."""
+    if LANGUAGE_MODE == "lock" and LANGUAGE_PREFERENCE:
+        return LANGUAGE_PREFERENCE
+    if model_language in ("en", "es"):
+        return model_language
+    detected = detect_language(spoken)
+    if len(str(spoken).split()) < 3:
+        return active_language or detected
+    return detected or active_language
+
+
 def select_voice(language: str) -> str:
     if language.lower().startswith("en"):
         return TTS_ENGLISH_VOICE
@@ -856,7 +889,15 @@ def build_language_block(preference: Optional[str], detected_lang: str = "") -> 
     Un modelo 7B se deja arrastrar por el idioma del prompt base, asi que la
     regla se repite y se explica en el propio idioma objetivo.
     """
-    if preference == "en":
+    target = preference if LANGUAGE_MODE == "lock" else (detected_lang or preference)
+    if target == "en":
+        if LANGUAGE_MODE != "lock":
+            return (
+                "IDIOMA DE ESTE TURNO: INGLÉS.\n"
+                "El usuario te está hablando en inglés, así que responde en inglés "
+                "(salvo que te pida explícitamente español en este mismo turno). "
+                "El campo \"language\" debe ser \"en\"."
+            )
         return (
             "IDIOMA OBLIGATORIO: INGLES (ENGLISH ONLY).\n"
             "The user has explicitly asked you to speak ONLY English.\n"
@@ -866,7 +907,14 @@ def build_language_block(preference: Optional[str], detected_lang: str = "") -> 
             "in English. If the user writes in Spanish, still answer in English.\n"
             "The \"language\" field MUST be \"en\"."
         )
-    if preference == "es":
+    if target == "es":
+        if LANGUAGE_MODE != "lock":
+            return (
+                "IDIOMA DE ESTE TURNO: ESPAÑOL.\n"
+                "El usuario te está hablando en español, así que responde en español "
+                "(salvo que te pida explícitamente inglés en este mismo turno). "
+                "El campo \"language\" debe ser \"es\"."
+            )
         return (
             "IDIOMA OBLIGATORIO: ESPAÑOL.\n"
             "El usuario ha pedido hablar solo en español.\n"
@@ -888,6 +936,7 @@ def get_system_prompt_with_context(
     story: bool = False,
     story_material: str = "",
     memories: Optional[List[str]] = None,
+    turn_language: Optional[str] = None,
 ) -> str:
     if not SYSTEM_PROMPT:
         base_prompt = (
@@ -908,7 +957,9 @@ def get_system_prompt_with_context(
         "anterior y usa el correcto a partir de ese momento."
     )
 
-    language_block = build_language_block(LANGUAGE_PREFERENCE, detected_lang)
+    language_block = build_language_block(
+        turn_language or LANGUAGE_PREFERENCE, detected_lang
+    )
     context = language_block + "\n\n" + base_prompt
 
     # Memoria del nombre del usuario: se inyecta en cada prompt para que Emma
@@ -1096,6 +1147,8 @@ def build_continuation_payload(
         "keep_alive": LLM_KEEP_ALIVE,
         "options": {
             "temperature": TEMPERATURE,
+            "top_p": TOP_P,
+            "repeat_penalty": REPEAT_PENALTY,
             "num_predict": num_predict,
             "num_ctx": LLM_NUM_CTX,
         },
@@ -2199,7 +2252,7 @@ def run_turn(turn_num: int, mic_stream, memoria):
                 print(f"   [IDIOMA] Error detectando peticion: {lang_error}")
 
         user_language = requested_language or detected_lang or detect_language(user_text)
-        active_language = LANGUAGE_PREFERENCE or detected_lang or user_language
+        active_language = resolve_turn_language(requested_language, detected_lang)
         if LANGUAGE_PREFERENCE:
             print(f"   [IDIOMA] Respuesta forzada en: {LANGUAGE_PREFERENCE}")
 
@@ -2273,6 +2326,7 @@ def run_turn(turn_num: int, mic_stream, memoria):
             active_language,
             story=story_mode,
             story_material=story_material,
+            turn_language=active_language,
         )
 
         # --- ETAPA 3a: contexto web (solo si la pregunta lo requiere) ---
@@ -2314,7 +2368,7 @@ def run_turn(turn_num: int, mic_stream, memoria):
 
         llm_start = time.perf_counter()
         tts_start = time.perf_counter()
-        speech_language = LANGUAGE_PREFERENCE or active_language
+        speech_language = active_language or "es"
         speech = LiveSpeech(speech_language, story_mode=story_mode)
         cancel_event = threading.Event()
         done_event = threading.Event()
@@ -2328,6 +2382,8 @@ def run_turn(turn_num: int, mic_stream, memoria):
             "keep_alive": LLM_KEEP_ALIVE,
             "options": {
                 "temperature": TEMPERATURE,
+                "top_p": TOP_P,
+                "repeat_penalty": REPEAT_PENALTY,
                 "num_predict": STORY_FIRST_PASS_TOKENS if story_mode else MAX_TOKENS,
                 "num_ctx": LLM_NUM_CTX,
             },
@@ -2372,8 +2428,9 @@ def run_turn(turn_num: int, mic_stream, memoria):
         corrections = []
         vocabulary = []
         learning = {}
-        assistant_language = LANGUAGE_PREFERENCE or "es"
+        assistant_language = active_language or "es"
         parsed_spoken = extract_spoken_text(full_response)
+        parsed: Dict[str, Any] = {}
 
         spoken = parsed_spoken
         if story_mode:
@@ -2391,14 +2448,16 @@ def run_turn(turn_num: int, mic_stream, memoria):
                 learning = parsed.get("learning") or {}
                 if not isinstance(learning, dict):
                     learning = {}
-                # La preferencia explicita manda sobre lo que diga el modelo.
-                assistant_language = LANGUAGE_PREFERENCE or detect_language(parsed_spoken)
+                model_lang = parsed.get("language")
+                assistant_language = answer_language(
+                    active_language, parsed_spoken, model_lang
+                )
             else:
                 parsed_spoken = extract_spoken_text(full_response)
-                assistant_language = LANGUAGE_PREFERENCE or detect_language(parsed_spoken)
+                assistant_language = answer_language(active_language, parsed_spoken)
         except json.JSONDecodeError:
             parsed_spoken = extract_spoken_text(full_response)
-            assistant_language = LANGUAGE_PREFERENCE or detect_language(parsed_spoken)
+            assistant_language = answer_language(active_language, parsed_spoken)
 
         spoken = parsed_spoken
         if story_mode:
@@ -2409,12 +2468,12 @@ def run_turn(turn_num: int, mic_stream, memoria):
         if not isinstance(spoken, str) or not spoken.strip():
             raise Exception("Respuesta del LLM vacia")
 
-        if LANGUAGE_PREFERENCE and assistant_language != LANGUAGE_PREFERENCE:
-            assistant_language = LANGUAGE_PREFERENCE
-        if story_mode and not LANGUAGE_PREFERENCE:
+        if story_mode:
             assistant_language = speech_language
-        elif not story_mode:
-            assistant_language = LANGUAGE_PREFERENCE or detect_language(spoken)
+        else:
+            assistant_language = answer_language(
+                active_language, spoken, parsed.get("language") if isinstance(parsed, dict) else None
+            )
 
         print(f"   LLM: '{spoken[:60]}...' ({assistant_language})")
         if not speech.emitted:
@@ -2794,7 +2853,8 @@ def main():
                     # Construir prompt
                     system_prompt = get_system_prompt_with_context(
                         user_text, active_language, story=story_mode,
-                        story_material=story_material, memories=memories
+                        story_material=story_material, memories=memories,
+                        turn_language=active_language,
                     )
                     
                     messages = [{"role": "system", "content": system_prompt}]
@@ -2816,6 +2876,8 @@ def main():
                         "keep_alive": LLM_KEEP_ALIVE,
                         "options": {
                             "temperature": TEMPERATURE,
+                            "top_p": TOP_P,
+                            "repeat_penalty": REPEAT_PENALTY,
                             "num_predict": STORY_FIRST_PASS_TOKENS if story_mode else MAX_TOKENS,
                             "num_ctx": LLM_NUM_CTX,
                         },
