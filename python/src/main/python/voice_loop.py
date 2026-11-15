@@ -31,6 +31,7 @@ import threading
 import queue
 import re
 import unicodedata
+import webbrowser
 import numpy as np
 from pathlib import Path
 import collections
@@ -2631,32 +2632,43 @@ def main():
                 else:
                     utterance_done = silence_ms >= VAD_SILENCE_MS
 
-            if utterance_done:
+            # Mensajes escritos en la UI: mismo pipeline que la voz.
+            typed_text = take_typed_text()
+
+            if utterance_done or typed_text:
                     speech_started = False
-                    # Procesar lo que dijo el usuario
-                    full_audio = np.concatenate(user_audio_buffer).astype(np.float32)
-                    user_audio_buffer = []
-                    
-                    if len(full_audio) * 1000 / AUDIO_SAMPLE_RATE < 400:  # MIN_SPEECH_MS
-                        print("   [VAD] Muy corto, descartado")
-                        vad_iter.reset_states()
-                        continue
-                    
-                    # Transcribir
-                    ui_emit("status", "Procesando tu voz…")
-                    print("   [STT] Transcribiendo...")
-                    stt_start = time.perf_counter()
-                    user_text, detected_lang, _forced = stt.transcribe(
-                        full_audio, language=STT_LANGUAGE, beam_size=STT_BEAM_SIZE,
-                        vad_filter=STT_VAD_FILTER, fallback_languages=STT_FALLBACK_LANGUAGES
-                    )
-                    stt_ms = (time.perf_counter() - stt_start) * 1000
-                    
-                    if not user_text or user_text.strip() == "":
-                        print("   [STT] Transcripción vacía")
-                        vad_iter.reset_states()
-                        continue
-                    
+                    if typed_text:
+                        user_audio_buffer = []
+                        user_text = typed_text
+                        detected_lang = detect_language(typed_text)
+                        stt_ms = 0.0
+                        ui_emit("status", "Procesando tu mensaje…")
+                        print(f"   [TEXTO] '{typed_text[:80]}'")
+                    else:
+                        # Procesar lo que dijo el usuario
+                        full_audio = np.concatenate(user_audio_buffer).astype(np.float32)
+                        user_audio_buffer = []
+
+                        if len(full_audio) * 1000 / AUDIO_SAMPLE_RATE < 400:  # MIN_SPEECH_MS
+                            print("   [VAD] Muy corto, descartado")
+                            vad_iter.reset_states()
+                            continue
+
+                        # Transcribir
+                        ui_emit("status", "Procesando tu voz…")
+                        print("   [STT] Transcribiendo...")
+                        stt_start = time.perf_counter()
+                        user_text, detected_lang, _forced = stt.transcribe(
+                            full_audio, language=STT_LANGUAGE, beam_size=STT_BEAM_SIZE,
+                            vad_filter=STT_VAD_FILTER, fallback_languages=STT_FALLBACK_LANGUAGES
+                        )
+                        stt_ms = (time.perf_counter() - stt_start) * 1000
+
+                        if not user_text or user_text.strip() == "":
+                            print("   [STT] Transcripción vacía")
+                            vad_iter.reset_states()
+                            continue
+
                     print(f"   Usuario: '{user_text}' (idioma: {detected_lang}, STT: {stt_ms:.0f}ms)")
                     
                     # Memorizar nombre si lo declara
@@ -2735,7 +2747,12 @@ def main():
                                 print(f"   [WEB] {len(web_sources)} fuentes")
                         except Exception as web_error:
                             print(f"   [WEB] Error: {web_error}")
-                    
+
+                    # Mostrar las fuentes en cuanto se conocen (antes de hablar),
+                    # para que el usuario pueda abrirlas mientras Emma responde.
+                    if web_sources:
+                        ui_emit("sources", json.dumps(web_sources, ensure_ascii=False))
+
                     # Construir prompt
                     system_prompt = get_system_prompt_with_context(
                         user_text, active_language, story=story_mode, story_material=story_material
@@ -2901,9 +2918,7 @@ def main():
                         assistant_language = LANGUAGE_PREFERENCE or detect_language(spoken)
                     
                     print(f"   Emma: '{spoken[:60]}...' ({assistant_language})")
-                    if web_sources:
-                        ui_emit("sources", json.dumps(web_sources, ensure_ascii=False))
-                    
+
                     # Guardar en historial y memoria
                     add_turn_to_history(user_text, spoken, assistant_language)
                     if MEMORY_ENABLED:
@@ -3200,7 +3215,7 @@ class ConversationWindow:
             left, right = self._card_padding(width, kind)
             try:
                 card.grid_configure(padx=(left, right))
-                label.configure(wraplength=self._card_wraplength(width, kind))
+                self._fit_text_height(label)
             except Exception:
                 continue
         self.root.after_idle(self._update_scroll_region)
@@ -3209,7 +3224,39 @@ class ConversationWindow:
         if self.canvas.winfo_exists():
             self.canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
 
-    def append_message(self, speaker, message):
+    def _fit_text_height(self, widget):
+        """Ajusta la altura de un tk.Text al numero de lineas que ocupara."""
+        try:
+            import tkinter.font as tkfont
+            from math import ceil
+
+            widget.update_idletasks()
+            text = widget.get("1.0", "end-1c")
+            if not text:
+                widget.configure(height=1)
+                return
+            width = widget.winfo_width()
+            if width <= 50:
+                parent = widget.master
+                width = parent.winfo_width() if parent.winfo_width() > 50 else 1000
+            pad = 2 * int(widget.cget("padx") or 0) + 8
+            usable = max(120, width - pad)
+            font = tkfont.Font(root=widget, font=widget.cget("font"))
+            total = 0
+            for line in text.split("\n"):
+                if not line:
+                    total += 1
+                    continue
+                total += max(1, int(ceil(font.measure(line) / usable)))
+            widget.configure(height=max(1, total))
+            try:
+                self.root.after_idle(self._update_scroll_region)
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+    def append_message(self, speaker, message, links=None):
         message = (message or "").strip()
         if not message:
             return
@@ -3269,10 +3316,54 @@ class ConversationWindow:
         body_text.insert("1.0", message)
         body_text.configure(state="disabled")  # solo lectura, pero seleccionable
         body_text.pack(fill="x", pady=(0, 10))
-        # Ajustar altura al contenido
-        body_text.update_idletasks()
-        lines = int(body_text.index("end-1c").split(".")[0])
-        body_text.configure(height=max(1, lines))
+
+        # Enlaces clicables (fuentes web): abren el navegador por defecto.
+        link_targets = {}
+        for index, item in enumerate(links or []):
+            url = (item or {}).get("url") or ""
+            label = (item or {}).get("label") or url
+            if not url or not label:
+                continue
+            tag = f"link_{row}_{index}"
+            body_text.tag_configure(tag, foreground="#1769aa", underline=True)
+            start = body_text.search(label, "1.0", stopindex="end", nocase=False)
+            if not start:
+                continue
+            body_text.tag_add(tag, start, f"{start}+{len(label)}c")
+            link_targets[tag] = url
+
+        if link_targets:
+            def _link_at(event, widget=body_text, targets=link_targets):
+                try:
+                    pos = widget.index(f"@{event.x},{event.y}")
+                    for name in widget.tag_names(pos):
+                        if name in targets:
+                            return targets[name]
+                except Exception:
+                    pass
+                return None
+
+            def _on_click(event):
+                url = _link_at(event)
+                if url:
+                    webbrowser.open(url)
+                    return "break"
+                return None
+
+            def _on_motion(event):
+                try:
+                    body_text.configure(
+                        cursor="hand2" if _link_at(event) else "arrow"
+                    )
+                except Exception:
+                    pass
+
+            body_text.bind("<Button-1>", _on_click)
+            body_text.bind("<Motion>", _on_motion)
+
+        # Ajustar altura al contenido (y reajustar cuando la ventana ya tiene ancho real)
+        self._fit_text_height(body_text)
+        self.root.after_idle(lambda w=body_text: self._fit_text_height(w))
         
         # Menú contextual: copiar
         def _copy_text(event=None):
@@ -3317,15 +3408,22 @@ class ConversationWindow:
                         try:
                             sources = json.loads(payload)
                             lines = []
+                            links = []
                             for source in sources:
                                 site = source.get("site") or "web"
                                 title = (source.get("title") or "").strip()
                                 url = (source.get("url") or "").strip()
-                                if len(url) > 85:
-                                    url = url[:82] + "…"
-                                lines.append(f"- {site}: {title}\n  {url}")
-                            if lines:
-                                self.append_message("FUENTES", "\n".join(lines))
+                                headline = f"• {site}: {title or '(sin título)'}"
+                                lines.append(headline)
+                                if url:
+                                    shown = url if len(url) <= 85 else url[:82] + "…"
+                                    lines.append(f"  {shown}")
+                                    links.append({"label": headline, "url": url})
+                                    links.append({"label": shown, "url": url})
+                                lines.append("")
+                            text = "\n".join(lines).strip()
+                            if text:
+                                self.append_message("FUENTES", text, links=links)
                         except Exception as source_error:
                             print(f"[UI] Error mostrando fuentes: {source_error}")
                     elif event_type == "status":
