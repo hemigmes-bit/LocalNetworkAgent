@@ -2560,6 +2560,8 @@ def main():
     last_vad_activity = 0
     VAD_SILENCE_MS = VAD_END_SILENCE_MS  # 1400ms por config
     FRAME_MS = 32
+    # Energia minima para considerar que hay voz y renovar el temporizador.
+    VOICE_RMS_FLOOR = float(AUDIO_CONFIG.get("voice_rms_floor", 0.012))
     
     try:
         while not stop_loop and not ENGINE_STOP_EVENT.is_set():
@@ -2582,10 +2584,12 @@ def main():
                         cancel_event.set()
                         if current_speech:
                             current_speech.stream.interrupt()
-                        # Guardar frames del barge-in para procesar
+                        # Semilla del turno: lo que el usuario alcanzo a decir
                         barge_frames = detector.take_frames()
                         if barge_frames:
-                            stash_barge_in_audio(barge_frames)
+                            user_audio_buffer = [f.copy() for f in barge_frames]
+                            speech_started = True
+                            last_vad_activity = time.perf_counter()
                             _barge_debug(f"BARGE_TRIGGER frames={len(barge_frames)}")
                         current_speech = None
                         if current_producer:
@@ -2601,25 +2605,34 @@ def main():
             # Procesar VAD para detectar voz del usuario
             ev = vad_iter(x, return_seconds=False)
             rms = float(np.sqrt(np.mean(x ** 2))) if x.size else 0.0
-            
-            if ev:
+
+            # Cualquier energia de voz real renueva el temporizador de silencio.
+            if rms >= VOICE_RMS_FLOOR:
                 last_vad_activity = time.perf_counter()
-                if "start" in ev:
-                    if not speech_started:
-                        speech_started = True
-                        user_audio_buffer = []
-                        print("   [VAD] Inicio de voz detectado")
-                elif "end" in ev and speech_started:
-                    speech_started = False
-                    print("   [VAD] Fin de voz detectado")
-            
+
+            if ev and "start" in ev:
+                if not speech_started:
+                    speech_started = True
+                    user_audio_buffer = []
+                    last_vad_activity = time.perf_counter()
+                    print("   [VAD] Inicio de voz detectado")
+            elif ev and "end" in ev and speech_started:
+                print("   [VAD] Fin de voz detectado (esperando silencio)")
+
             if speech_started:
                 user_audio_buffer.append(x.copy())
-            
-            # Detectar silencio prolongado tras fin de voz -> procesar
-            if not speech_started and user_audio_buffer:
-                silence_duration = (time.perf_counter() - last_vad_activity) * 1000
-                if silence_duration >= VAD_SILENCE_MS:
+
+            # Fin de locucion: silencio sostenido, con o sin evento 'end' del VAD.
+            utterance_done = False
+            if user_audio_buffer:
+                silence_ms = (time.perf_counter() - last_vad_activity) * 1000
+                if speech_started:
+                    utterance_done = silence_ms >= VAD_SILENCE_MS and rms < VOICE_RMS_FLOOR
+                else:
+                    utterance_done = silence_ms >= VAD_SILENCE_MS
+
+            if utterance_done:
+                    speech_started = False
                     # Procesar lo que dijo el usuario
                     full_audio = np.concatenate(user_audio_buffer).astype(np.float32)
                     user_audio_buffer = []
@@ -2660,8 +2673,8 @@ def main():
                     
                     # Procesar petición de voz/canción (respuestas directas)
                     voice_result = handle_voice_request(
-                        user_text, stt_ms, detected_lang, 
-                        LANGUAGE_PREFERENCE or detected_lang, 0, time.perf_counter()
+                        user_text, stt_ms, detected_lang,
+                        LANGUAGE_PREFERENCE or detected_lang
                     )
                     if voice_result is not None:
                         vad_iter.reset_states()
@@ -2815,7 +2828,23 @@ def main():
                     # Esperar a que termine el TTS (play_until vigila barge-in internamente)
                     barge_happened = current_speech.play_until(done_event=done_event, cancel_event=cancel_event)
                     current_producer.join(timeout=10.0)
-                    
+                    current_producer = None
+
+                    if barge_happened:
+                        # El usuario interrumpio: recuperar el audio ya capturado y
+                        # seguir escuchando el resto de la frase sin perderla.
+                        pending = take_barge_in_audio()
+                        if pending:
+                            user_audio_buffer = [f.copy() for f in pending]
+                            speech_started = True
+                            last_vad_activity = time.perf_counter()
+                            print(f"   [FULL DUPLEX] Escuchando interrupcion ({len(pending)} frames)")
+                        current_speech.stream.stop(timeout=2.0)
+                        current_speech = None
+                        conversation_active = False
+                        vad_iter.reset_states()
+                        ui_emit("status", "Te escucho…")
+                        continue
                     full_response = holder.get("full", "")
                     llm_error = holder.get("error", "")
                     
