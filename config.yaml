@@ -19,6 +19,16 @@ history:
   max_turns: 10
 conversation:
   max_turns: 500             # limite de turnos por sesion (voz + texto)
+memory:
+  enabled: true
+  db_path: data/emma.db      # perfil + errores/vocabulario SRS + sesiones
+  prompt_max_chars: 1600     # perfil inyectado en el prompt (~400 tokens)
+  due_limit: 3               # repasos que Emma propone al empezar
+  ask_due_on_start: true
+  consolidate_on_exit: true  # extraccion JSON validada al cerrar la sesion
+  voice_switching: true
+  web_search: false
+  engine: duckduckgo
 web:
   enabled: true              # busqueda web bajo demanda (SearXNG + Wikipedia + noticias)
   max_results: 3             # fuentes maximas que se pasan al LLM

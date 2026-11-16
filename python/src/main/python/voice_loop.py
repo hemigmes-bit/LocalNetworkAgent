@@ -67,6 +67,11 @@ MEMORY_CONFIG = CONFIG.get("memory", {})
 # Configuración nueva
 MEMORY_ENABLED = MEMORY_CONFIG.get("enabled", True)
 MEMORY_PATH = MEMORY_CONFIG.get("path", "memoria_emma.json")
+MEMORY_DB_PATH = MEMORY_CONFIG.get("db_path", "data/emma.db")
+MEMORY_PROMPT_CHARS = int(MEMORY_CONFIG.get("prompt_max_chars", 1600))
+MEMORY_DUE_LIMIT = int(MEMORY_CONFIG.get("due_limit", 3))
+MEMORY_ASK_DUE = bool(MEMORY_CONFIG.get("ask_due_on_start", True))
+MEMORY_CONSOLIDATE = bool(MEMORY_CONFIG.get("consolidate_on_exit", True))
 VOICE_SWITCHING_ENABLED = MEMORY_CONFIG.get("voice_switching", True)
 WEB_SEARCH_ENABLED = MEMORY_CONFIG.get("web_search", False)
 WEB_SEARCH_ENGINE = MEMORY_CONFIG.get("engine", "duckduckgo")
@@ -104,6 +109,15 @@ except Exception as _state_import_error:
     emma_state = None
     EMMA_STATE_AVAILABLE = False
     print(f"[ESTADO] Perfil de aprendizaje no disponible: {_state_import_error}")
+
+# Memoria estructurada (SQLite): perfil, SRS, herramientas y consolidacion.
+try:
+    import emma_memory
+    EMMA_MEMORY_AVAILABLE = True
+except Exception as _memory_import_error:
+    emma_memory = None
+    EMMA_MEMORY_AVAILABLE = False
+    print(f"[MEM] Memoria SQLite no disponible: {_memory_import_error}")
 
 LANGUAGE_PREFERENCE = (
     emma_state.get_language_preference() if EMMA_STATE_AVAILABLE else None
@@ -996,7 +1010,22 @@ def get_system_prompt_with_context(
             + "\n".join(memories)
         )
 
-    if EMMA_STATE_AVAILABLE and not story:
+    if EMMA_MEMORY_AVAILABLE and not story:
+        try:
+            # El historial largo NO va al prompt: solo perfil y, en el primer
+            # turno, la lista corta de repasos pendientes.
+            include_due = MEMORY_ASK_DUE and not history.user_texts
+            memory_block = emma_memory.build_prompt_block(
+                include_due=include_due,
+                language=detected_lang or LANGUAGE_PREFERENCE or "es",
+                max_chars=MEMORY_PROMPT_CHARS,
+            )
+        except Exception as memory_error:
+            memory_block = ""
+            print(f"[MEM] No se pudo leer el perfil: {memory_error}")
+        if memory_block:
+            context += "\n\n" + memory_block
+    elif EMMA_STATE_AVAILABLE and not story:
         try:
             learning_block = emma_state.build_learning_block()
         except Exception as state_error:
@@ -2603,8 +2632,23 @@ def main():
     
     os.makedirs("logs", exist_ok=True)
     
-    # --- Cargar memoria persistente al iniciar ---
-    memoria = cargar_memoria()
+    # --- Memoria estructurada: un unico SQLite (perfil + SRS + sesiones) ---
+    memoria = []
+    memory_session_id = 0
+    if MEMORY_ENABLED and EMMA_MEMORY_AVAILABLE:
+        try:
+            _store = emma_memory.get_store(MEMORY_DB_PATH)
+            _migration = _store.migrate_legacy()
+            if _migration.get("imported_turns"):
+                print(f"[MEM] Migrados {_migration['imported_turns']} turnos al SQLite")
+            memory_session_id = _store.start_session()
+            _due = len(_store.get_due_reviews(MEMORY_DUE_LIMIT))
+            print(f"[MEM] Sesion SQLite #{memory_session_id}; repasos pendientes: {_due}")
+        except Exception as memory_error:
+            print(f"[MEM] No se pudo abrir la memoria SQLite: {memory_error}")
+            memoria = cargar_memoria()
+    else:
+        memoria = cargar_memoria()
     
     # --- Inicializar MicStream una sola vez ---
     input_device = AUDIO_CONFIG.get("input_device", 1)
@@ -2781,6 +2825,15 @@ def main():
                         except Exception as name_error:
                             print(f"[MEM] Error detectando nombre: {name_error}")
 
+                    # Nivel MCER u objetivos declarados ("mi nivel es B1").
+                    if EMMA_MEMORY_AVAILABLE and user_text:
+                        try:
+                            facts = emma_memory.remember_user_facts(user_text)
+                            if facts:
+                                print(f"[MEM] Perfil actualizado: {facts}")
+                        except Exception as facts_error:
+                            print(f"[MEM] Error guardando hechos: {facts_error}")
+
                     # Preferencia de idioma explicita ("speak in English", "en español"...)
                     requested_language = None
                     if EMMA_STATE_AVAILABLE:
@@ -2801,6 +2854,36 @@ def main():
                     )
                     
                     ui_emit("user", user_text)
+
+                    # Consultas de memoria ("qué toca repasar", "qué sabes de mí",
+                    # "qué hablamos sobre X"): respuesta directa con herramientas
+                    # validadas, sin gastar una llamada al LLM.
+                    if MEMORY_ENABLED and EMMA_MEMORY_AVAILABLE:
+                        try:
+                            intent = emma_memory.detect_memory_intent(user_text)
+                            if intent:
+                                reply = emma_memory.answer_intent(intent, active_language)
+                                if reply:
+                                    print(f"   [MEM] {intent['name']}: '{reply[:60]}...'")
+                                    ui_emit("assistant", reply)
+                                    ui_emit("status", "Emma está hablando…")
+                                    try:
+                                        speak_text(reply, active_language)
+                                    except Exception as tts_error:
+                                        print(f"   [MEM] Error TTS: {tts_error}")
+                                    add_turn_to_history(user_text, reply, active_language)
+                                    if memory_session_id:
+                                        try:
+                                            emma_memory.log_turn(
+                                                memory_session_id, user_text, reply,
+                                                active_language,
+                                            )
+                                        except Exception as log_error:
+                                            print(f"   [MEM] Error guardando turno: {log_error}")
+                                    vad_iter.reset_states()
+                                    continue
+                        except Exception as mem_error:
+                            print(f"   [MEM] Error atendiendo consulta: {mem_error}")
                     
                     # Procesar petición de voz/canción (respuestas directas)
                     voice_result = handle_voice_request(
@@ -2869,9 +2952,14 @@ def main():
                     if web_sources:
                         ui_emit("sources", json.dumps(web_sources, ensure_ascii=False))
 
-                    # Recuerdos relevantes de conversaciones anteriores.
+                    # Recuerdos relevantes: busqueda FTS en conversaciones anteriores.
                     memories = []
-                    if EMMA_STATE_AVAILABLE:
+                    if EMMA_MEMORY_AVAILABLE:
+                        try:
+                            memories = emma_memory.search_memories(user_text, limit=2)
+                        except Exception as recall_error:
+                            print(f"[MEM] Error buscando recuerdos: {recall_error}")
+                    elif EMMA_STATE_AVAILABLE:
                         try:
                             memories = emma_state.recall_memories(user_text, memoria)
                         except Exception as recall_error:
@@ -3044,9 +3132,27 @@ def main():
                     
                     print(f"   Emma: '{spoken[:60]}...' ({assistant_language})")
 
-                    # Guardar en historial y memoria
+                    # Guardar en historial y en la memoria estructurada.
                     add_turn_to_history(user_text, spoken, assistant_language)
-                    if MEMORY_ENABLED:
+                    if MEMORY_ENABLED and EMMA_MEMORY_AVAILABLE and memory_session_id:
+                        try:
+                            stats = emma_memory.log_turn(
+                                memory_session_id,
+                                user_text,
+                                spoken,
+                                assistant_language,
+                                corrections=corrections,
+                                vocabulary=vocabulary,
+                            )
+                            if stats.get("errors") or stats.get("vocab"):
+                                print(
+                                    f"   [MEM] Guardados {stats['errors']} errores y "
+                                    f"{stats['vocab']} palabras"
+                                )
+                        except Exception as mem_error:
+                            print(f"   [MEM] Error guardando turno: {mem_error}")
+                    elif MEMORY_ENABLED:
+                        # Fallback: memoria JSON antigua.
                         memoria.append({
                             "turno": len(memoria) + 1,
                             "usuario": user_text,
@@ -3056,15 +3162,6 @@ def main():
                             "aprendizaje": learning,
                         })
                         guardar_memoria(memoria)
-                    
-                    # Registrar en perfil de aprendizaje
-                    if EMMA_STATE_AVAILABLE:
-                        try:
-                            profile = emma_state.load_learning()
-                            emma_state.record_turn(profile, corrections=corrections, learning=learning,
-                                                  user_text=user_text, assistant_text=spoken)
-                        except Exception as pe:
-                            print(f"   [PERFIL] Error: {pe}")
                     
                     vad_iter.reset_states()
                     conversation_active = False
@@ -3081,7 +3178,36 @@ def main():
         ENGINE_FINISHED_EVENT.set()
         ui_emit("status", "Emma se ha detenido.")
     
-    if MEMORY_ENABLED and memoria:
+    if MEMORY_ENABLED and EMMA_MEMORY_AVAILABLE and memory_session_id:
+        _store = emma_memory.get_store(MEMORY_DB_PATH)
+        if MEMORY_CONSOLIDATE:
+            try:
+                print("[MEM] Consolidando la sesion (extraccion JSON validada)...")
+                report = emma_memory.consolidate_session(
+                    memory_session_id,
+                    OLLAMA_MODEL,
+                    OLLAMA_URL,
+                    LLM_NUM_CTX,
+                )
+                if report.get("skipped"):
+                    print(f"[MEM] Consolidacion omitida: {report.get('reason')}")
+                else:
+                    print(
+                        f"[MEM] Resumen: {report.get('summary', '')[:120]}\n"
+                        f"[MEM] Errores nuevos: {report.get('errors_saved')} | "
+                        f"Vocabulario: {report.get('vocab_saved')} | "
+                        f"Nivel: {report.get('level') or 'sin cambio'}"
+                    )
+            except Exception as mem_error:
+                print(f"[MEM] Error consolidando la sesion: {mem_error}")
+            finally:
+                try:
+                    _store.end_session(memory_session_id)
+                except Exception:
+                    pass
+        else:
+            _store.end_session(memory_session_id)
+    elif MEMORY_ENABLED and memoria:
         guardar_memoria(memoria)
         print(f"\nMemoria guardada: {len(memoria)} turnos en {MEMORY_PATH}")
     
@@ -3708,16 +3834,14 @@ def cambiar_voz(nueva_voz: str):
 
 
 def consultar_memoria(texto_usuario: str) -> str:
-    """Consulta la memoria de conversaciones previas para no repetir información."""
+    """Consulta la memoria de conversaciones previas (carga perezosa)."""
     resultados = []
-    for entrada in memoria_emma:
+    for entrada in cargar_memoria():
         if texto_usuario.lower() in entrada.get("usuario", "").lower():
             resultados.append(entrada)
     return resultados
 
 
-# Cargar memoria persistente al iniciar
-memoria_emma = cargar_memoria()
 historial_path = "memoria_emma.json"
 
 _INSTANCE_LOCK = None
