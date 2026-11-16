@@ -191,6 +191,9 @@ STORY_MAX_TOKENS = int(LLM_CONFIG.get("story_max_tokens", 1400))
 STORY_FIRST_PASS_TOKENS = int(LLM_CONFIG.get("story_first_pass_tokens", 500))
 LLM_KEEP_ALIVE = str(LLM_CONFIG.get("keep_alive", "30m"))
 LLM_NUM_CTX = int(LLM_CONFIG.get("num_ctx", 4096))
+# Modelos de la familia Qwen3 generan "thinking" que consume num_predict antes
+# de emitir contenido. Con think=False el texto hablado llega de inmediato.
+LLM_THINK = bool(LLM_CONFIG.get("think", False))
 MAX_HISTORY = HISTORY_CONFIG.get("max_turns", 10)
 MAX_CONVERSATION_TURNS = int(CONVERSATION_CONFIG.get("max_turns", 500))
 STT_MODEL_SIZE = STT_CONFIG.get("model_size", "base")
@@ -1144,6 +1147,7 @@ def build_continuation_payload(
         ],
         "stream": stream,
         "format": LLM_RESPONSE_SCHEMA,
+        "think": LLM_THINK,
         "keep_alive": LLM_KEEP_ALIVE,
         "options": {
             "temperature": TEMPERATURE,
@@ -1581,7 +1585,10 @@ class LiveSpeech:
             # El texto se emite por frases en cuanto se acepta: el usuario debe
             # poder leerlo en pantalla mientras Emma habla (streaming sincronico).
             self.emitted = True
-            ui_emit("assistant", chunk)
+            if self.story_mode:
+                ui_emit("assistant_append", chunk)
+            else:
+                ui_emit("assistant", chunk)
             self.sentences += 1
 
     def _is_noise(self, text: str) -> bool:
@@ -2379,6 +2386,7 @@ def run_turn(turn_num: int, mic_stream, memoria):
             "messages": messages,
             "stream": True,
             "format": LLM_RESPONSE_SCHEMA,
+            "think": LLM_THINK,
             "keep_alive": LLM_KEEP_ALIVE,
             "options": {
                 "temperature": TEMPERATURE,
@@ -2478,7 +2486,10 @@ def run_turn(turn_num: int, mic_stream, memoria):
         print(f"   LLM: '{spoken[:60]}...' ({assistant_language})")
         if not speech.emitted:
             # Sin streaming de frases (respuesta corta o cancelada): emitir completo.
-            ui_emit("assistant", spoken)
+            if story_mode:
+                ui_emit("assistant_append", spoken)
+            else:
+                ui_emit("assistant", spoken)
         if web_sources:
             ui_emit("sources", json.dumps(web_sources, ensure_ascii=False))
         ui_emit("status", "Emma está hablando…")
@@ -2769,13 +2780,31 @@ def main():
                                 print(f"[MEM] Usuario se llama ahora: {USER_NAME}")
                         except Exception as name_error:
                             print(f"[MEM] Error detectando nombre: {name_error}")
+
+                    # Preferencia de idioma explicita ("speak in English", "en español"...)
+                    requested_language = None
+                    if EMMA_STATE_AVAILABLE:
+                        try:
+                            requested_language = emma_state.detect_language_request(user_text)
+                            if requested_language and requested_language != LANGUAGE_PREFERENCE:
+                                LANGUAGE_PREFERENCE = requested_language
+                                emma_state.set_language_preference(requested_language)
+                                label = "INGLÉS" if requested_language == "en" else "ESPAÑOL"
+                                print(f"   [IDIOMA] El usuario pide {label}; preferencia guardada")
+                        except Exception as lang_error:
+                            print(f"   [IDIOMA] Error detectando peticion: {lang_error}")
+
+                    # Idioma real de este turno: en modo adaptativo manda el idioma
+                    # en que habla el usuario, no la preferencia guardada.
+                    active_language = resolve_turn_language(
+                        requested_language, detected_lang or detect_language(user_text)
+                    )
                     
                     ui_emit("user", user_text)
                     
                     # Procesar petición de voz/canción (respuestas directas)
                     voice_result = handle_voice_request(
-                        user_text, stt_ms, detected_lang,
-                        LANGUAGE_PREFERENCE or detected_lang
+                        user_text, stt_ms, detected_lang, active_language
                     )
                     if voice_result is not None:
                         vad_iter.reset_states()
@@ -2783,8 +2812,7 @@ def main():
                     
                     if SONG_ENABLED:
                         song_result = handle_song_request(
-                            user_text, stt_ms, detected_lang,
-                            LANGUAGE_PREFERENCE or detected_lang, mic_stream
+                            user_text, stt_ms, detected_lang, active_language, mic_stream
                         )
                         if song_result is not None:
                             vad_iter.reset_states()
@@ -2798,7 +2826,6 @@ def main():
                     
                     # Detectar si es cuento
                     story_mode = is_story_request(user_text)
-                    active_language = LANGUAGE_PREFERENCE or detected_lang
                     
                     # Buscar material si es cuento
                     story_material = ""
@@ -2873,6 +2900,7 @@ def main():
                         "messages": messages,
                         "stream": True,
                         "format": LLM_RESPONSE_SCHEMA,
+                        "think": LLM_THINK,
                         "keep_alive": LLM_KEEP_ALIVE,
                         "options": {
                             "temperature": TEMPERATURE,
@@ -2985,19 +3013,19 @@ def main():
                             learning = parsed.get("learning") or {}
                             if not isinstance(learning, dict):
                                 learning = {}
-                            assistant_language = LANGUAGE_PREFERENCE or detect_language(spoken)
+                            assistant_language = active_language
                         else:
                             spoken = extract_spoken_text(full_response)
                             corrections = []
                             vocabulary = []
                             learning = {}
-                            assistant_language = LANGUAGE_PREFERENCE or detect_language(spoken)
+                            assistant_language = active_language
                     except json.JSONDecodeError:
                         spoken = extract_spoken_text(full_response)
                         corrections = []
                         vocabulary = []
                         learning = {}
-                        assistant_language = LANGUAGE_PREFERENCE or detect_language(spoken)
+                        assistant_language = active_language
                     
                     if story_mode:
                         spoken = clean_story_text(holder.get("story_spoken") or spoken)
@@ -3011,12 +3039,8 @@ def main():
                         current_speech = None
                         continue
                     
-                    if LANGUAGE_PREFERENCE and assistant_language != LANGUAGE_PREFERENCE:
-                        assistant_language = LANGUAGE_PREFERENCE
-                    if story_mode and not LANGUAGE_PREFERENCE:
-                        assistant_language = active_language
-                    elif not story_mode:
-                        assistant_language = LANGUAGE_PREFERENCE or detect_language(spoken)
+                    # Voz final segun el texto real: evita leer espanol con voz inglesa.
+                    assistant_language = answer_language(active_language, spoken)
                     
                     print(f"   Emma: '{spoken[:60]}...' ({assistant_language})")
 
@@ -3466,6 +3490,9 @@ class ConversationWindow:
         self._fit_text_height(body_text)
         self.root.after_idle(lambda w=body_text: self._fit_text_height(w))
         
+        # Guardar referencia a la tarjeta y al widget de texto para poder añadir texto después
+        self._message_cards.append((card, body_text, kind))
+        
         # Menú contextual: copiar
         def _copy_text(event=None):
             try:
@@ -3475,6 +3502,26 @@ class ConversationWindow:
             except Exception:
                 pass
         body_text.bind("<Button-3>", lambda e: _show_context_menu(e, body_text))
+
+    def append_to_last_emma(self, additional_text: str):
+        """Añade texto al último mensaje de Emma (para modo cuento streaming)."""
+        if not additional_text.strip():
+            return
+        # Buscar la última tarjeta de Emma
+        for card, body_text, kind in reversed(self._message_cards):
+            if kind == "emma":
+                try:
+                    body_text.configure(state="normal")
+                    body_text.insert("end", " " + additional_text)
+                    body_text.configure(state="disabled")
+                    self._fit_text_height(body_text)
+                    # Auto-scroll al final
+                    self.canvas.yview_moveto(1.0)
+                except Exception:
+                    pass
+                return
+        # Si no hay mensaje previo de Emma, crear uno nuevo
+        self.append_message("EMMA", additional_text)
         body_text.bind("<Control-c>", _copy_text)
         body_text.bind("<Command-c>", _copy_text)
         
@@ -3505,6 +3552,8 @@ class ConversationWindow:
                         self.append_message("TÚ", payload)
                     elif event_type == "assistant":
                         self.append_message("EMMA", payload)
+                    elif event_type == "assistant_append":
+                        self.append_to_last_emma(payload)
                     elif event_type == "sources":
                         try:
                             sources = json.loads(payload)
