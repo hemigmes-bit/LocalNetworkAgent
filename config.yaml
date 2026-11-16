@@ -69,11 +69,11 @@ stt:
   min_silence_ms: 500
 vad:
   threshold: 0.5
-  min_silence_duration_ms: 800
-  min_speech_duration_ms: 250
-  speech_pad_ms: 100
-  end_of_turn_silence_ms: 1400
-  min_speech_ms: 400
+  min_silence_duration_ms: 1000
+  min_speech_duration_ms: 300
+  speech_pad_ms: 200
+  end_of_turn_silence_ms: 2000
+  min_speech_ms: 500
 tts:
   model_path: kokoro-v1.0.onnx
   voices_path: voices-v1.0.bin

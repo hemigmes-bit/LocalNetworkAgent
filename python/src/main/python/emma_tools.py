@@ -107,6 +107,22 @@ TOOLS: List[Dict[str, Any]] = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "record_review",
+            "description": "Registra si el alumno acerto un repaso (error o vocab).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "item_id": {"type": "integer", "description": "ID del elemento."},
+                    "kind": {"type": "string", "enum": ["error", "vocab"]},
+                    "correct": {"type": "boolean", "description": "True si acerto, False si fallo."},
+                },
+                "required": ["item_id", "kind", "correct"],
+            },
+        },
+    },
 ]
 
 _TOOL_NAMES = {tool["function"]["name"] for tool in TOOLS}
