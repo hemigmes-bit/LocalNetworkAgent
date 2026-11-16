@@ -38,7 +38,14 @@ web:
   story_max_chars: 1400      # texto maximo de las fuentes curadas para cuentos
   wikipedia: true
   news: true
-  extra_trusted_domains: []  # dominios de confianza adicionales
+  extra_trusted_domains:
+    - eltiempo.es
+    - aemet.es
+    - weather.com
+    - accuweather.com
+    - wunderground.com
+    - meteored.es
+    - tutiempo.net
   search_engine: searxng        # motor principal: searxng | ddgs | bing
   searxng_url: http://localhost:8080  # instancia local SearXNG (API /search)
   searxng_categories: general       # categoria por defecto (general, news, science...)
