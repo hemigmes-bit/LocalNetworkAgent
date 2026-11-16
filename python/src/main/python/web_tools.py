@@ -574,6 +574,11 @@ _SEARCH_VERBS = (
     "lee la pagina", "lee esta pagina", "hablame de", "cuentame sobre",
     "cuentame de", "dime sobre", "informacion sobre", "informacion de",
     "tell me about",
+    # Verbos de atribución: "qué dice El País sobre...", "qué publican sobre..."
+    "dice", "dicen", "dijo", "dijeron", "says", "said", "publica", "publican",
+    "publicado", "publicada", "habla", "hablan", "opina", "opinan", "piensa",
+    "piensan", "significa", "significan", "ocurre", "ocurrio", "pasa", "paso",
+    "sucede", "sucedio", "cuenta", "cuentan",
 )
 _NEWS_WORDS = (
     "noticia", "noticias", "ultima hora", "ultimas noticias", "actualidad", "news",
