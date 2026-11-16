@@ -989,6 +989,27 @@ def get_store(db_path: Optional[str] = None) -> MemoryStore:
     return _STORE
 
 
+def log_turn(
+    session_id: int,
+    user_text: str,
+    assistant_text: str,
+    language: str = "es",
+    corrections: Optional[List[Dict[str, Any]]] = None,
+    vocabulary: Optional[List[Dict[str, Any]]] = None,
+    turn: int = 0,
+) -> Dict[str, int]:
+    """Guarda un turno en la sesion abierta (envoltorio de MemoryStore.log_turn)."""
+    return get_store().log_turn(
+        session_id,
+        user_text,
+        assistant_text,
+        language,
+        corrections=corrections,
+        vocabulary=vocabulary,
+        turn=turn,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Bloques para el prompt (perfil pequeno, nunca historial largo)
 # ---------------------------------------------------------------------------

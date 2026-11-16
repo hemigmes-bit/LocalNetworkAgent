@@ -3680,6 +3680,9 @@ class ConversationWindow:
             except Exception:
                 pass
         body_text.bind("<Button-3>", lambda e: _show_context_menu(e, body_text))
+        
+        # Auto-scroll al final para que se vea el mensaje nuevo
+        self.root.after_idle(lambda: self.canvas.yview_moveto(1.0))
 
     def append_to_last_emma(self, additional_text: str):
         """Añade texto al último mensaje de Emma (para modo cuento streaming)."""
