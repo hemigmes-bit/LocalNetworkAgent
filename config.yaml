@@ -43,6 +43,11 @@ web:
   searxng_url: http://localhost:8080  # instancia local SearXNG (API /search)
   searxng_categories: general       # categoria por defecto (general, news, science...)
   searxng_engines: [bing, google, duckduckgo]  # motores probados en orden de preferencia
+tools:
+  enabled: true              # el modelo decide que herramienta usar (web o memoria)
+  max_calls: 3               # llamadas por turno
+  max_result_chars: 1100     # recorte de cada resultado (contexto pequeno)
+  selection_timeout_s: 20    # limite de la llamada que elige la herramienta
 song_recognition:
   enabled: true              # reconocer musica grabada (Shazam) y silbidos/tarareos
   seconds: 9                 # segundos que graba tras el aviso de Emma

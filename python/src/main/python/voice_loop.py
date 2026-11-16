@@ -119,6 +119,18 @@ except Exception as _memory_import_error:
     EMMA_MEMORY_AVAILABLE = False
     print(f"[MEM] Memoria SQLite no disponible: {_memory_import_error}")
 
+# Herramientas generales (web + memoria) con argumentos validados.
+TOOLS_CONFIG = CONFIG.get("tools", {})
+try:
+    import emma_tools
+    EMMA_TOOLS_AVAILABLE = True
+except Exception as _tools_import_error:
+    emma_tools = None
+    EMMA_TOOLS_AVAILABLE = False
+    print(f"[TOOLS] Herramientas no disponibles: {_tools_import_error}")
+
+TOOLS_ENABLED = bool(TOOLS_CONFIG.get("enabled", True)) and EMMA_TOOLS_AVAILABLE
+
 LANGUAGE_PREFERENCE = (
     emma_state.get_language_preference() if EMMA_STATE_AVAILABLE else None
 )
@@ -2365,30 +2377,40 @@ def run_turn(turn_num: int, mic_stream, memoria):
             turn_language=active_language,
         )
 
-        # --- ETAPA 3a: contexto web (solo si la pregunta lo requiere) ---
-        if WEB_ENABLED and not story_mode and web_tools.should_search(user_text):
-            print("   [WEB] Consultando fuentes...")
+        # --- ETAPA 3a: herramientas web/memoria (solo si la pregunta lo requiere) ---
+        tool_messages = []
+        tool_used = []
+        if TOOLS_ENABLED and not story_mode and emma_tools.needs_tools(user_text):
+            print("   [TOOLS] Consultando herramientas...")
             ui_emit("status", "Consultando fuentes…")
-            web_started = time.perf_counter()
+            tools_started = time.perf_counter()
             try:
-                web_context = web_tools.gather_context(
+                tool_result = emma_tools.gather_tool_context(
                     user_text,
-                    lang=detected_lang or "es",
+                    lang=detected_lang or active_language or "es",
+                    model=OLLAMA_MODEL,
+                    url=OLLAMA_URL,
+                    num_ctx=LLM_NUM_CTX,
                     previous=(history.user_texts[-1] if history.user_texts else ""),
                     config=WEB_CONFIG,
+                    max_calls=int(TOOLS_CONFIG.get("max_calls", 3)),
+                    max_result_chars=int(TOOLS_CONFIG.get("max_result_chars", 1100)),
+                    timeout=float(TOOLS_CONFIG.get("selection_timeout_s", 20)),
                 )
-            except Exception as web_error:
-                print(f"   [WEB] Error: {web_error}")
-                web_context = None
-
-            if web_context and web_context.get("sources"):
-                system_prompt += web_tools.build_prompt_block(web_context)
-                web_sources = web_context["sources"]
-                web_ms = (time.perf_counter() - web_started) * 1000
-                print(f"   [WEB] {len(web_sources)} fuentes consultadas en {web_ms:.0f} ms")
-            else:
-                print("   [WEB] Sin resultados; respondo con conocimiento propio")
+                tool_messages = tool_result.get("messages") or []
+                tool_used = tool_result.get("used") or []
+                web_sources = tool_result.get("sources") or []
+                tools_ms = (time.perf_counter() - tools_started) * 1000
+                print(
+                    f"   [TOOLS] {', '.join(tool_result.get('used') or []) or 'ninguna'}; "
+                    f"{len(web_sources)} fuentes en {tools_ms:.0f} ms"
+                )
+            except Exception as tool_error:
+                print(f"   [TOOLS] Error: {tool_error}")
             ui_emit("status", "Emma está pensando…")
+
+        if tool_messages:
+            system_prompt += emma_tools.tool_result_hint(tool_used)
 
         messages = [{"role": "system", "content": system_prompt}]
 
@@ -2400,6 +2422,12 @@ def run_turn(turn_num: int, mic_stream, memoria):
             messages.append({"role": "user", "content": ut})
             messages.append({"role": "assistant", "content": ar})
 
+        messages.extend(tool_messages)
+        if tool_messages:
+            messages.append({
+                "role": "system",
+                "content": emma_tools.tool_reinforcement(tool_used),
+            })
         messages.append({"role": "user", "content": user_text})
 
         llm_start = time.perf_counter()
@@ -2931,21 +2959,37 @@ def main():
                             except Exception as story_error:
                                 print(f"   [CUENTO] Error: {story_error}")
                     
-                    # Contexto web normal
-                    if WEB_ENABLED and not story_mode and web_tools.should_search(user_text):
-                        print("   [WEB] Consultando fuentes...")
+                    # Herramientas web/memoria (solo si la pregunta lo requiere)
+                    tool_messages = []
+                    tool_used = []
+                    if TOOLS_ENABLED and not story_mode and emma_tools.needs_tools(user_text):
+                        print("   [TOOLS] Consultando herramientas...")
                         ui_emit("status", "Consultando fuentes…")
+                        tools_started = time.perf_counter()
                         try:
-                            web_context = web_tools.gather_context(
-                                user_text, lang=detected_lang,
+                            tool_result = emma_tools.gather_tool_context(
+                                user_text,
+                                lang=detected_lang or active_language or "es",
+                                model=OLLAMA_MODEL,
+                                url=OLLAMA_URL,
+                                num_ctx=LLM_NUM_CTX,
                                 previous=(history.user_texts[-1] if history.user_texts else ""),
-                                config=WEB_CONFIG
+                                config=WEB_CONFIG,
+                                max_calls=int(TOOLS_CONFIG.get("max_calls", 3)),
+                                max_result_chars=int(TOOLS_CONFIG.get("max_result_chars", 1100)),
+                                timeout=float(TOOLS_CONFIG.get("selection_timeout_s", 20)),
                             )
-                            if web_context and web_context.get("sources"):
-                                web_sources = web_context["sources"]
-                                print(f"   [WEB] {len(web_sources)} fuentes")
-                        except Exception as web_error:
-                            print(f"   [WEB] Error: {web_error}")
+                            tool_messages = tool_result.get("messages") or []
+                            tool_used = tool_result.get("used") or []
+                            web_sources = tool_result.get("sources") or []
+                            tools_ms = (time.perf_counter() - tools_started) * 1000
+                            print(
+                                f"   [TOOLS] {', '.join(tool_result.get('used') or []) or 'ninguna'}; "
+                                f"{len(web_sources)} fuentes en {tools_ms:.0f} ms"
+                            )
+                        except Exception as tool_error:
+                            print(f"   [TOOLS] Error: {tool_error}")
+                        ui_emit("status", "Emma está pensando…")
 
                     # Mostrar las fuentes en cuanto se conocen (antes de hablar),
                     # para que el usuario pueda abrirlas mientras Emma responde.
@@ -2971,6 +3015,8 @@ def main():
                         story_material=story_material, memories=memories,
                         turn_language=active_language,
                     )
+                    if tool_messages:
+                        system_prompt += emma_tools.tool_result_hint(tool_used)
                     
                     messages = [{"role": "system", "content": system_prompt}]
                     for ut, ar, al in zip(
@@ -2980,6 +3026,12 @@ def main():
                     ):
                         messages.append({"role": "user", "content": ut})
                         messages.append({"role": "assistant", "content": ar})
+                    messages.extend(tool_messages)
+                    if tool_messages:
+                        messages.append({
+                            "role": "system",
+                            "content": emma_tools.tool_reinforcement(tool_used),
+                        })
                     messages.append({"role": "user", "content": user_text})
                     
                     # Iniciar LLM + TTS streaming

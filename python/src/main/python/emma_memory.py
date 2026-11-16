@@ -1300,7 +1300,13 @@ _PROFILE_RE = re.compile(
 _SEARCH_RE = re.compile(
     r"(?:\bque\b|\bde que\b|\bsobre que\b)\s+(?:hablamos|hemos hablado|dijimos|"
     r"comentamos)\s+(?:de|sobre)?\s*(.+)$"
-    r"|\brecuerdas cuando hablamos de\s+(.+)$"
+    r"|(?:recuerdas|te acuerdas|te acordas)\s+(?:lo que|cuando|de cuando|de lo que)?\s*"
+    r"(?:hablamos|hemos hablado|hablabamos|dijimos|te dije|comentamos)\s*"
+    r"(?:de|sobre)?\s*(.+)$"
+    r"|(?:recuerdas|te acuerdas)\s+(?:mi|el|la|lo de|de)\s+(.+)$"
+    r"|do you remember\s+(?:what|when)\s+(?:we|i)\s+(?:talked|spoke|said|told you)\s*"
+    r"(?:about|of)?\s*(.+)$"
+    r"|what did\s+(?:we|i)\s+(?:talk|say)\s+about\s*(.+)$"
     r"|\bsearch (?:our )?(?:conversations?|sessions?) (?:about|for)\s+(.+)$",
     re.IGNORECASE,
 )
@@ -1317,6 +1323,7 @@ def detect_memory_intent(text: str) -> Optional[Dict[str, Any]]:
     if match:
         query = next((group for group in match.groups() if group), "")
         query = _clean(query, 120).strip(" ?!.,")
+        query = re.sub(r"^(de|del|sobre|about|regarding|of)\s+", "", query)
         if query:
             return {"name": "search_sessions", "args": {"query": query}}
         return None

@@ -54,13 +54,32 @@ DEFAULTS: Dict[str, Any] = {
 
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/124.0 Safari/537.36 Emma/2.0"
+    "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 )
+# Cabeceras de un Chrome real: sin sufijos tipo "Emma/2.0", que los cortafuegos
+# de medios (El Pais, Cloudflare) usan para devolver 403.
 HEADERS = {
     "User-Agent": USER_AGENT,
+    "Accept": (
+        "text/html,application/xhtml+xml,application/xml;q=0.9,"
+        "image/avif,image/webp,image/apng,*/*;q=0.8"
+    ),
     "Accept-Language": "es-ES,es;q=0.9,en;q=0.8",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Encoding": "gzip, deflate",
+    "Cache-Control": "no-cache",
+    "Pragma": "no-cache",
+    "Sec-Ch-Ua": '"Chromium";v="131", "Not_A Brand";v="24", "Google Chrome";v="131"',
+    "Sec-Ch-Ua-Mobile": "?0",
+    "Sec-Ch-Ua-Platform": '"Windows"',
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "none",
+    "Sec-Fetch-User": "?1",
+    "Upgrade-Insecure-Requests": "1",
 }
+
+# Lector de respaldo para paginas que bloquean peticiones directas.
+READER_PROXY = "https://r.jina.ai/http://"
 
 MAX_DOWNLOAD_BYTES = 2_000_000
 CACHE_TTL_S = 300
@@ -524,6 +543,12 @@ _GENERIC_QUERY_WORDS = {
     "compra", "donde", "cuando", "quien", "como", "hoy", "ultima", "ultimas",
     "nuevo", "nueva", "guia", "review", "opiniones", "actualidad", "latest",
     "news", "price", "prices", "best", "buy", "review", "guide", "today",
+    # Verbos de consulta: "que dice El Pais sobre..." no debe hacer match con
+    # cualquier pagina que contenga "dice" (p. ej. un juego de dados).
+    "dice", "dicen", "dijo", "dijeron", "says", "said", "publica", "publican",
+    "publicado", "publicada", "habla", "hablan", "opina", "opinan", "piensa",
+    "piensan", "significa", "significan", "ocurre", "ocurrio", "pasa", "paso",
+    "sucede", "sucedio", "cuenta", "cuentan", "sobre", "acerca", "respecto",
 }
 
 # ---------------------------------------------------------------------------
@@ -1017,6 +1042,73 @@ def _cache_put(key: str, value: Any) -> None:
 # Lectura de una pagina concreta
 # ---------------------------------------------------------------------------
 
+READER_FALLBACK_STATUS = (401, 403, 429, 451, 503)
+MIN_USEFUL_CHARS = 220
+
+
+def _clean_markdown(text: str) -> str:
+    """Quita imagenes y enlaces markdown dejando el texto legible."""
+    text = re.sub(r"!\[[^\]]*\]\([^)]*\)", " ", text)
+    text = re.sub(r"\[([^\]]*)\]\([^)]*\)", r"\1", text)
+    text = re.sub(r"^#{1,6}\s*", "", text, flags=re.MULTILINE)
+    text = re.sub(r"[*_`>]+", "", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
+
+
+def _fetch_via_reader(url: str, timeout: float = 10.0, max_chars: int = 2200) -> Dict[str, Any]:
+    """Lector externo (r.jina.ai) para paginas que bloquean peticiones directas.
+
+    Devuelve el mismo formato que ``fetch_page``; ``error`` vacio si funciono.
+    """
+    result: Dict[str, Any] = {
+        "title": "",
+        "url": url,
+        "site": _site_name(url),
+        "text": "",
+        "snippet": "",
+        "kind": "page",
+        "error": "",
+        "via": "reader",
+    }
+    proxy_url = READER_PROXY + re.sub(r"^https?://", "", url, flags=re.IGNORECASE)
+    try:
+        response = requests.get(
+            proxy_url,
+            headers={"User-Agent": USER_AGENT, "Accept": "text/plain"},
+            timeout=max(timeout, 10.0),
+        )
+        if response.status_code >= 400:
+            result["error"] = f"reader HTTP {response.status_code}"
+            return result
+        body = response.text
+    except Exception as exc:
+        result["error"] = f"reader {type(exc).__name__}"
+        return result
+
+    title = ""
+    title_match = re.search(r"^Title:\s*(.+)$", body, re.MULTILINE)
+    if title_match:
+        title = title_match.group(1).strip()
+    content = body
+    marker = body.find("Markdown Content:")
+    if marker >= 0:
+        content = body[marker + len("Markdown Content:"):]
+    content = _clean_markdown(content)
+    if not content.strip():
+        result["error"] = "reader sin texto util"
+        return result
+    result.update(
+        {
+            "title": title or _site_name(url),
+            "text": _truncate(content, max_chars),
+            "snippet": _truncate(content, 300),
+            "error": "",
+        }
+    )
+    return result
+
+
 def fetch_page(url: str, timeout: float = 7.0, max_chars: int = 2200) -> Dict[str, Any]:
     """Descarga una pagina y devuelve titulo, texto principal y metadatos."""
     cached = _cache_get("page:" + url)
@@ -1043,6 +1135,12 @@ def fetch_page(url: str, timeout: float = 7.0, max_chars: int = 2200) -> Dict[st
             url, headers=HEADERS, timeout=timeout, stream=True, allow_redirects=True
         ) as response:
             if response.status_code >= 400:
+                # 403/429/451/503: cortafuegos o paywall. Probamos el lector.
+                if response.status_code in READER_FALLBACK_STATUS:
+                    reader = _fetch_via_reader(url, timeout, max_chars)
+                    if not reader.get("error"):
+                        _cache_put("page:" + url, reader)
+                        return reader
                 result["error"] = f"HTTP {response.status_code}"
                 return result
             content_type = (response.headers.get("content-type") or "").lower()
@@ -1057,9 +1155,17 @@ def fetch_page(url: str, timeout: float = 7.0, max_chars: int = 2200) -> Dict[st
             encoding = response.encoding or "utf-8"
             final_url = response.url
     except requests.Timeout:
+        reader = _fetch_via_reader(url, timeout, max_chars)
+        if not reader.get("error"):
+            _cache_put("page:" + url, reader)
+            return reader
         result["error"] = "Tiempo de espera agotado"
         return result
     except Exception as exc:
+        reader = _fetch_via_reader(url, timeout, max_chars)
+        if not reader.get("error"):
+            _cache_put("page:" + url, reader)
+            return reader
         result["error"] = f"{type(exc).__name__}: {exc}"
         return result
 
@@ -1078,6 +1184,14 @@ def fetch_page(url: str, timeout: float = 7.0, max_chars: int = 2200) -> Dict[st
         )
         if meta and meta.get("content"):
             text = meta["content"].strip()
+
+    # Paginas con muro de cookies o cargadas por JS dejan poco texto: el lector
+    # externo suele devolver el articulo completo.
+    if len(text.strip()) < MIN_USEFUL_CHARS:
+        reader = _fetch_via_reader(url, timeout, max_chars)
+        if not reader.get("error") and len(reader.get("text") or "") > len(text.strip()):
+            _cache_put("page:" + url, reader)
+            return reader
 
     result.update(
         {
@@ -1492,6 +1606,99 @@ def _bing_rss(query: str, limit: int, timeout: float) -> List[Dict[str, Any]]:
         return []
 
 
+def _bing_news_rss(
+    query: str, limit: int, timeout: float, lang: str = "es"
+) -> List[Dict[str, Any]]:
+    """Titulares via Bing News RSS; devuelve el enlace directo del medio."""
+    try:
+        params: Dict[str, Any] = {"q": query, "format": "rss"}
+        params["setmkt"] = "en-US" if lang == "en" else "es-ES"
+        response = requests.get(
+            "https://www.bing.com/news/search",
+            params=params,
+            headers=HEADERS,
+            timeout=timeout,
+        )
+        if response.status_code != 200:
+            return []
+        root = ET.fromstring(response.content)
+        results: List[Dict[str, Any]] = []
+        for item in root.findall(".//item")[: limit * 2]:
+            title = (item.findtext("title") or "").strip()
+            link = (item.findtext("link") or "").strip()
+            if not title or not link:
+                continue
+            # Bing envuelve el enlace real: apiclick.aspx?...&url=https%3a%2f%2f...
+            url = link
+            try:
+                query_params = urllib.parse.parse_qs(urllib.parse.urlparse(link).query)
+                real = (query_params.get("url") or [""])[0]
+                if real.startswith("http"):
+                    url = real
+            except Exception:
+                pass
+            description = re.sub(r"<[^>]+>", "", item.findtext("description") or "")
+            published = (item.findtext("pubDate") or "")[:22]
+            results.append({
+                "title": title,
+                "url": url,
+                "snippet": re.sub(r"\s+", " ", f"{description} {published}").strip(),
+                "site": _site_name(url),
+                "kind": "news",
+                "engine": "Bing News",
+                "error": "",
+            })
+        return results[:limit]
+    except Exception:
+        return []
+
+
+def _wikipedia_search(
+    query: str, lang: str, limit: int, timeout: float
+) -> List[Dict[str, Any]]:
+    """Busqueda de articulos en Wikipedia (API oficial, sin scraping)."""
+    code = "en" if lang == "en" else "es"
+    try:
+        response = requests.get(
+            f"https://{code}.wikipedia.org/w/api.php",
+            params={
+                "action": "query",
+                "list": "search",
+                "srsearch": query,
+                "format": "json",
+                "srlimit": max(2, min(10, limit)),
+                "utf8": 1,
+            },
+            headers=HEADERS,
+            timeout=timeout,
+        )
+        if response.status_code != 200:
+            return []
+        pages = ((response.json().get("query") or {}).get("search") or [])
+    except Exception:
+        return []
+    results: List[Dict[str, Any]] = []
+    for page in pages:
+        title = str(page.get("title") or "").strip()
+        if not title:
+            continue
+        url = (
+            f"https://{code}.wikipedia.org/wiki/"
+            + urllib.parse.quote(title.replace(" ", "_"))
+        )
+        snippet = re.sub(r"<[^>]+>", "", str(page.get("snippet") or ""))
+        results.append({
+            "title": title,
+            "url": url,
+            "snippet": re.sub(r"\s+", " ", snippet).strip(),
+            "site": f"{code}.wikipedia.org",
+            "kind": "page",
+            "engine": "Wikipedia",
+            "error": "",
+        })
+    return results
+
+
 def news_search(
     query: str, limit: int = 4, timeout: float = 6.0, lang: str = "es"
 ) -> List[Dict[str, Any]]:
@@ -1680,32 +1887,54 @@ def search_web(
                 "error": "",
             })
 
-    if not normalized:
-        normalized = _bing_rss(query, wanted, timeout)
+    def _rank(candidates: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Filtra destinos inseguros y resultados sin relacion con la consulta."""
+        scored: List[Dict[str, Any]] = []
+        for result in candidates:
+            url = result.get("url") or ""
+            allowed, _ = _url_allowed(url)
+            if not allowed or _domain_score(url, extra_trusted) < 0:
+                continue
+            relevance = _search_relevance(query, result)
+            if relevance <= 0:
+                continue
+            item = dict(result)
+            item["relevance"] = relevance
+            scored.append(item)
+        scored.sort(
+            key=lambda r: (
+                r.get("relevance", 0),
+                _domain_score(r["url"], extra_trusted),
+                len(r.get("snippet") or ""),
+            ),
+            reverse=True,
+        )
+        return scored
 
-    # Filtra destinos inseguros, duplicados y resultados sin coincidencia
-    # tematica. La relevancia de la consulta precede a la reputacion del dominio.
-    ranked: List[Dict[str, Any]] = []
-    for result in normalized:
-        url = result.get("url") or ""
-        allowed, _ = _url_allowed(url)
-        if not allowed or _domain_score(url, extra_trusted) < 0:
-            continue
-        relevance = _search_relevance(query, result)
-        if relevance <= 0:
-            continue
-        item = dict(result)
-        item["relevance"] = relevance
-        ranked.append(item)
+    ranked = _rank(normalized)
 
-    ranked.sort(
-        key=lambda r: (
-            r.get("relevance", 0),
-            _domain_score(r["url"], extra_trusted),
-            len(r.get("snippet") or ""),
-        ),
-        reverse=True,
-    )
+    if len(ranked) < max_results:
+        ranked = _rank(normalized + _bing_rss(query, wanted, timeout))
+
+    # Los buscadores generales estan bloqueados por captcha/anti-bot en esta
+    # red; los RSS de noticias responden bien y se consultan en paralelo.
+    if len(ranked) < max_results:
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            google_future = executor.submit(news_search, query, wanted, timeout, lang)
+            bing_future = executor.submit(_bing_news_rss, query, wanted, timeout, lang)
+            try:
+                news_items = google_future.result()
+            except Exception:
+                news_items = []
+            try:
+                bing_items = bing_future.result()
+            except Exception:
+                bing_items = []
+        ranked = _rank(normalized + news_items + bing_items)
+
+    # Ultimo recurso para consultas de entidades: API de Wikipedia.
+    if not ranked:
+        ranked = _rank(_wikipedia_search(query, lang, wanted, timeout))
 
     chosen: List[Dict[str, Any]] = []
     seen_urls = set()
