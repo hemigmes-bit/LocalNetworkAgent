@@ -615,6 +615,10 @@ _STOPWORDS = {
     "que", "con", "por", "para", "los", "las", "del", "una", "unos", "unas",
     "como", "donde", "cuando", "quien", "quienes", "sobre", "este", "esta",
     "estos", "estas", "hay", "mas", "pero", "sus", "sin", "entre",
+    # Palabras de pregunta en ingles: "who is Sam Altman" no debe buscar
+    # resultados que solo contengan "sam" (p. ej. la clase SAM de Windows).
+    "who", "what", "when", "where", "why", "how", "is", "are", "were",
+    "does", "did", "tell", "about", "latest",
 }
 
 
@@ -1889,6 +1893,7 @@ def search_web(
 
     def _rank(candidates: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Filtra destinos inseguros y resultados sin relacion con la consulta."""
+        keywords = _keywords(query) - _GENERIC_QUERY_WORDS
         scored: List[Dict[str, Any]] = []
         for result in candidates:
             url = result.get("url") or ""
@@ -1898,6 +1903,15 @@ def search_web(
             relevance = _search_relevance(query, result)
             if relevance <= 0:
                 continue
+            # Con dos o mas palabras clave, exigir al menos dos coincidencias:
+            # evita que "Sam Altman" acepte una pagina que solo dice "SAM".
+            if len(keywords) >= 2:
+                haystack = _norm(
+                    f"{result.get('title') or ''} "
+                    f"{result.get('snippet') or result.get('text') or ''}"
+                )
+                if sum(1 for word in keywords if word in haystack) < 2:
+                    continue
             item = dict(result)
             item["relevance"] = relevance
             scored.append(item)
