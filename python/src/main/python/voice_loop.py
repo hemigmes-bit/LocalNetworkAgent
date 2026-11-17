@@ -548,83 +548,18 @@ print(
 
 )
 
-USER_NAME = ""
-
-if EMMA_MEMORY_AVAILABLE:
-
+def get_current_user_name() -> str:
+    """Obtiene el nombre actual del usuario desde la fuente unica (SQLite via emma_state)."""
     try:
+        if EMMA_STATE_AVAILABLE:
+            return str(emma_state.get_user_name() or "")
+    except Exception:
+        pass
+    return ""
 
-        USER_NAME = str(emma_memory.get_user_name() or "")
-
-    except Exception as _user_name_error:
-
-        print(f"[MEM] No se pudo leer el nombre de SQLite: {_user_name_error}")
-
-        USER_NAME = ""
-
-if not USER_NAME and EMMA_STATE_AVAILABLE:
-
-    try:
-
-        USER_NAME = str(emma_state.get_user_name() or "")
-
-    except Exception as _user_name_error:
-
-        USER_NAME = ""
-
-print(f"[MEM] Nombre del usuario: {USER_NAME or '(no detectado)'}")
-
-
-
-
-
-def refresh_user_name() -> str:
-
-    """Sincroniza USER_NAME con SQLite (fuente unica) y lo devuelve.
-
-
-
-    Si SQLite no responde, usa ``emma_state`` como respaldo. Nunca deja el
-
-    global con un valor distinto al almacenado.
-
-    """
-
-    global USER_NAME
-
-    current: Optional[str] = None
-
-    if EMMA_MEMORY_AVAILABLE:
-
-        try:
-
-            current = str(emma_memory.get_user_name() or "").strip()
-
-        except Exception as memory_error:
-
-            print(f"[MEM] No se pudo leer el nombre de SQLite: {memory_error}")
-
-    if current is None and EMMA_STATE_AVAILABLE:
-
-        try:
-
-            current = str(emma_state.get_user_name() or "").strip()
-
-        except Exception as state_error:
-
-            print(f"[MEM] No se pudo leer el nombre de emma_state: {state_error}")
-
-    if current is None:
-
-        return USER_NAME
-
-    if current != USER_NAME:
-
-        print(f"[MEM] Nombre sincronizado: {current or '(no detectado)'}")
-
-        USER_NAME = current
-
-    return USER_NAME
+# Nombre inicial
+_current_user_name = get_current_user_name()
+print(f"[MEM] Nombre del usuario: {_current_user_name or '(no detectado)'}")
 
 
 
@@ -2334,13 +2269,13 @@ def get_system_prompt_with_context(
 
     # se dirija a la persona correcta con el nombre que ella misma declaró.
 
-    if USER_NAME:
+    if get_current_user_name():
 
         context += (
 
-            f"\n\nMEMORIA DEL USUARIO: el usuario se llama \"{USER_NAME}\". "
+            f"\n\nMEMORIA DEL USUARIO: el usuario se llama \"{get_current_user_name()}\". Llámalo siempre \"{get_current_user_name()}\" y nunca le pongas otro nombre. "
 
-            f"Llámalo siempre \"{USER_NAME}\" y nunca le pongas otro nombre. "
+
 
             "Si dice que no es su nombre, discúlpate y pregúntale cómo se llama."
 
@@ -4640,7 +4575,7 @@ def handle_profile_request(
 
     reply = answer_profile_question(
 
-        user_text, USER_NAME, user_language or active_language
+        user_text, get_current_user_name(), user_language or active_language
 
     )
 
@@ -5014,7 +4949,7 @@ def process_turn(
 
     """
 
-    global stop_loop, LANGUAGE_PREFERENCE, USER_NAME, memory_session_id, turn_results
+    global stop_loop, LANGUAGE_PREFERENCE, memory_session_id, turn_results
 
 
 
@@ -5102,21 +5037,21 @@ def process_turn(
 
         try:
 
-            if emma_state.detect_name_correction(user_text) == "clear" and USER_NAME:
+            if emma_state.detect_name_correction(user_text) == "clear" and get_current_user_name():
 
-                print(f"[MEM] El usuario corrige: olvido el nombre '{USER_NAME}'")
+                print(f"[MEM] El usuario corrige: olvido el nombre '{get_current_user_name()}'")
 
                 emma_state.clear_user_name()
 
-                USER_NAME = ""
+                
 
             detected_name = emma_state.detect_user_name(user_text)
 
-            if detected_name and detected_name != USER_NAME:
+            if detected_name and detected_name != get_current_user_name():
 
-                USER_NAME = str(emma_state.set_user_name(detected_name) or "")
+                _current_user_name = str(emma_state.set_user_name(detected_name) or "")
 
-                print(f"[MEM] Usuario se llama ahora: {USER_NAME}")
+                print(f"[MEM] Usuario se llama ahora: {_current_user_name}")
 
         except Exception as name_error:
 
@@ -5274,6 +5209,16 @@ def process_turn(
 
             return song_result
 
+
+
+    # --- Preguntas sobre el nombre (tras voice/song) ---
+    profile_result = handle_profile_request(
+        user_text, stt_ms, detected_lang or user_language, active_language
+    )
+    if profile_result is not None:
+        if is_continuous and vad_iter:
+            vad_iter.reset_states()
+        return profile_result
 
 
     # --- Preparar respuesta LLM + TTS streaming ---
@@ -6016,7 +5961,7 @@ def process_turn(
 
 def run_turn(turn_num: int, mic_stream, memoria):
 
-    global stop_loop, LANGUAGE_PREFERENCE, USER_NAME
+    global stop_loop, LANGUAGE_PREFERENCE
 
     
 
@@ -6116,21 +6061,21 @@ def run_turn(turn_num: int, mic_stream, memoria):
 
             try:
 
-                if emma_state.detect_name_correction(user_text) == "clear" and USER_NAME:
+                if emma_state.detect_name_correction(user_text) == "clear" and get_current_user_name():
 
-                    print(f"[MEM] El usuario corrige: olvido el nombre '{USER_NAME}'")
+                    print(f"[MEM] El usuario corrige: olvido el nombre '{get_current_user_name()}'")
 
                     emma_state.clear_user_name()
 
-                    USER_NAME = ""
+                    
 
                 detected_name = emma_state.detect_user_name(user_text)
 
-                if detected_name and detected_name != USER_NAME:
+                if detected_name and detected_name != get_current_user_name():
 
-                    USER_NAME = str(emma_state.set_user_name(detected_name) or "")
+                    _current_user_name = str(emma_state.set_user_name(detected_name) or "")
 
-                    print(f"[MEM] Usuario se llama ahora: {USER_NAME}")
+                    print(f"[MEM] Usuario se llama ahora: {_current_user_name}")
 
             except Exception as name_error:
 
@@ -6185,7 +6130,7 @@ def run_turn(turn_num: int, mic_stream, memoria):
 
 def main():
 
-    global stop_loop, total_turns, ACTIVE_MIC_STREAM, USER_NAME, LANGUAGE_PREFERENCE
+    global stop_loop, total_turns, ACTIVE_MIC_STREAM, LANGUAGE_PREFERENCE
 
     
 
@@ -6643,21 +6588,21 @@ def main():
 
                         try:
 
-                            if emma_state.detect_name_correction(user_text) == "clear" and USER_NAME:
+                            if emma_state.detect_name_correction(user_text) == "clear" and get_current_user_name():
 
-                                print(f"[MEM] El usuario corrige: olvido el nombre '{USER_NAME}'")
+                                print(f"[MEM] El usuario corrige: olvido el nombre '{get_current_user_name()}'")
 
                                 emma_state.clear_user_name()
 
-                                USER_NAME = ""
+                                
 
                             detected_name = emma_state.detect_user_name(user_text)
 
-                            if detected_name and detected_name != USER_NAME:
+                            if detected_name and detected_name != get_current_user_name():
 
-                                USER_NAME = str(emma_state.set_user_name(detected_name) or "")
+                                _current_user_name = str(emma_state.set_user_name(detected_name) or "")
 
-                                print(f"[MEM] Usuario se llama ahora: {USER_NAME}")
+                                print(f"[MEM] Usuario se llama ahora: {_current_user_name}")
 
                         except Exception as name_error:
 
@@ -6832,8 +6777,16 @@ def main():
                             vad_iter.reset_states()
 
                             continue
-
+    
                     
+                    # --- Preguntas sobre el nombre (tras voice/song) ---
+                    profile_result = handle_profile_request(
+                        user_text, stt_ms, detected_lang, active_language
+                    )
+                    if profile_result is not None:
+                        vad_iter.reset_states()
+                        continue
+
 
                     # Preparar respuesta LLM + TTS streaming
 

@@ -208,35 +208,18 @@ def _sqlite_user_name() -> Optional[str]:
 def get_user_name() -> Optional[str]:
     """Devuelve el nombre con el que Emma se dirige al usuario (o None).
 
-    SQLite es la fuente unica. Si la base aun no tiene nombre y
-    ``emma_prefs.json`` conserva uno antiguo, se migra una sola vez para no
-    perder el nombre que el usuario ya habia declarado.
+    SQLite es la unica fuente de verdad.
     """
     name = _sqlite_user_name()
     if name and is_plausible_name(name):
         return name
-
-    prefs = load_prefs()
-    legacy = str(prefs.get("user_name") or "").strip()
-    if not legacy or not is_plausible_name(legacy):
-        return None
-
-    try:
-        import emma_memory
-        migrated = str(emma_memory.set_user_name(legacy) or "").strip()
-        if migrated:
-            print(f"[MEM] Nombre migrado de emma_prefs.json a SQLite: {migrated}")
-            return migrated
-    except Exception as exc:
-        print(f"[WARN] No se pudo migrar el nombre a SQLite: {exc}")
-    return legacy
+    return None
 
 
 def set_user_name(name: str) -> Optional[str]:
     """Guarda el nombre declarado por el usuario ("Me llamo Airman").
 
-    Persiste en SQLite (fuente unica) y refleja el valor en
-    ``emma_prefs.json`` como respaldo para bases de datos nuevas.
+    Persiste en SQLite (fuente unica).
     """
     cleaned = re.sub(r"\s+", " ", str(name or "")).strip().strip(" .,!?¿¡'\"")
     if not is_plausible_name(cleaned):
@@ -249,13 +232,7 @@ def set_user_name(name: str) -> Optional[str]:
     except Exception as exc:
         print(f"[WARN] No se pudo guardar el nombre en SQLite: {exc}")
 
-    if not saved:
-        # SQLite no disponible: conserva al menos el valor en prefs.
-        saved = cleaned
-    prefs = load_prefs()
-    prefs["user_name"] = saved
-    save_prefs(prefs)
-    return saved
+    return saved if saved else None
 
 
 def clear_user_name() -> None:
@@ -265,9 +242,6 @@ def clear_user_name() -> None:
         emma_memory.clear_user_name()
     except Exception as exc:
         print(f"[WARN] No se pudo borrar el nombre de SQLite: {exc}")
-    prefs = load_prefs()
-    prefs["user_name"] = ""
-    save_prefs(prefs)
 
 
 # Palabras que nunca son un nombre: evitan guardar "not", "fine", "sorry"...
