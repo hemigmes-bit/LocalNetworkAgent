@@ -52,6 +52,7 @@ MAX_SUMMARY_CHARS = 700
 LEVELS = ("A1", "A2", "B1", "B2", "C1", "C2")
 
 PROFILE_DEFAULTS: Dict[str, str] = {
+    "user_name": "",
     "level": "",
     "goals": "",
     "interests": "",
@@ -306,6 +307,22 @@ class MemoryStore:
                 (key, text),
             )
         return self.get_profile()
+
+    def get_user_name(self) -> str:
+        """Nombre del usuario. SQLite es la fuente unica."""
+        return str(self.get_profile().get("user_name") or "").strip()
+
+    def set_user_name(self, name: Any) -> str:
+        """Guarda el nombre del usuario en el perfil SQLite."""
+        cleaned = _clean(name, 60).strip(" .,!?\"'")
+        if not cleaned or not _is_latin(cleaned):
+            return self.get_user_name()
+        self.set_profile_value("user_name", cleaned)
+        return cleaned
+
+    def clear_user_name(self) -> None:
+        """Olvida el nombre guardado (correccion explicita del usuario)."""
+        self.set_profile_value("user_name", "")
 
     def merge_interests(self, items: Iterable[str], limit: int = 8) -> List[str]:
         existing = [
@@ -1057,6 +1074,21 @@ def get_store(db_path: Optional[str] = None) -> MemoryStore:
     return _STORE
 
 
+def get_user_name() -> str:
+    """Nombre del usuario desde SQLite (fuente unica)."""
+    return get_store().get_user_name()
+
+
+def set_user_name(name: Any) -> str:
+    """Guarda el nombre en SQLite y devuelve el valor normalizado."""
+    return get_store().set_user_name(name)
+
+
+def clear_user_name() -> None:
+    """Borra el nombre del perfil SQLite."""
+    get_store().clear_user_name()
+
+
 def log_turn(
     session_id: int,
     user_text: str,
@@ -1526,6 +1558,13 @@ def _selftest() -> None:
     store.set_profile_value("level", "b1")
     assert store.get_profile()["level"] == "B1"
     assert store.set_profile_value("level", "Z9")["level"] == "B1"
+
+    # El nombre vive en el perfil SQLite (fuente unica).
+    assert store.get_user_name() == ""
+    assert store.set_user_name("Henry") == "Henry"
+    assert store.get_user_name() == "Henry"
+    store.clear_user_name()
+    assert store.get_user_name() == ""
 
     assert store.save_error("I go to beach", "I went to the beach", "past tense")
     assert store.save_error("I go to beach", "I went to the beach", "past tense")

@@ -195,31 +195,76 @@ def set_language_preference(language: Optional[str]) -> Dict[str, Any]:
 # Nombre del usuario
 # ---------------------------------------------------------------------------
 
-def get_user_name() -> Optional[str]:
-    """Devuelve el nombre con el que Emma se dirige al usuario (o None)."""
-    prefs = load_prefs()
-    name = str(prefs.get("user_name") or "").strip()
-    if not name or not is_plausible_name(name):
+def _sqlite_user_name() -> Optional[str]:
+    """Lee el nombre de SQLite. Devuelve None si no se puede consultar."""
+    try:
+        import emma_memory
+        return str(emma_memory.get_user_name() or "").strip()
+    except Exception as exc:
+        print(f"[WARN] No se pudo leer el nombre de SQLite: {exc}")
         return None
-    return name
+
+
+def get_user_name() -> Optional[str]:
+    """Devuelve el nombre con el que Emma se dirige al usuario (o None).
+
+    SQLite es la fuente unica. Si la base aun no tiene nombre y
+    ``emma_prefs.json`` conserva uno antiguo, se migra una sola vez para no
+    perder el nombre que el usuario ya habia declarado.
+    """
+    name = _sqlite_user_name()
+    if name and is_plausible_name(name):
+        return name
+
+    prefs = load_prefs()
+    legacy = str(prefs.get("user_name") or "").strip()
+    if not legacy or not is_plausible_name(legacy):
+        return None
+
+    try:
+        import emma_memory
+        migrated = str(emma_memory.set_user_name(legacy) or "").strip()
+        if migrated:
+            print(f"[MEM] Nombre migrado de emma_prefs.json a SQLite: {migrated}")
+            return migrated
+    except Exception as exc:
+        print(f"[WARN] No se pudo migrar el nombre a SQLite: {exc}")
+    return legacy
 
 
 def set_user_name(name: str) -> Optional[str]:
     """Guarda el nombre declarado por el usuario ("Me llamo Airman").
 
-    Persiste en ``emma_prefs.json`` para que sobreviva reinicios de Emma.
+    Persiste en SQLite (fuente unica) y refleja el valor en
+    ``emma_prefs.json`` como respaldo para bases de datos nuevas.
     """
     cleaned = re.sub(r"\s+", " ", str(name or "")).strip().strip(" .,!?¿¡'\"")
     if not is_plausible_name(cleaned):
         return get_user_name()
+
+    saved = ""
+    try:
+        import emma_memory
+        saved = str(emma_memory.set_user_name(cleaned) or "").strip()
+    except Exception as exc:
+        print(f"[WARN] No se pudo guardar el nombre en SQLite: {exc}")
+
+    if not saved:
+        # SQLite no disponible: conserva al menos el valor en prefs.
+        saved = cleaned
     prefs = load_prefs()
-    prefs["user_name"] = cleaned
+    prefs["user_name"] = saved
     save_prefs(prefs)
-    return cleaned
+    return saved
 
 
 def clear_user_name() -> None:
     """Olvida el nombre guardado (p. ej. tras una correccion del usuario)."""
+    try:
+        import emma_memory
+        emma_memory.clear_user_name()
+    except Exception as exc:
+        print(f"[WARN] No se pudo borrar el nombre de SQLite: {exc}")
     prefs = load_prefs()
     prefs["user_name"] = ""
     save_prefs(prefs)

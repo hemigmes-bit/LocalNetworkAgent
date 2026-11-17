@@ -257,12 +257,46 @@ print(
     f"| es={TTS_SPANISH_VOICE} | speed={TTS_SPEED:.2f}"
 )
 USER_NAME = ""
-if EMMA_STATE_AVAILABLE:
+if EMMA_MEMORY_AVAILABLE:
+    try:
+        USER_NAME = str(emma_memory.get_user_name() or "")
+    except Exception as _user_name_error:
+        print(f"[MEM] No se pudo leer el nombre de SQLite: {_user_name_error}")
+        USER_NAME = ""
+if not USER_NAME and EMMA_STATE_AVAILABLE:
     try:
         USER_NAME = str(emma_state.get_user_name() or "")
     except Exception as _user_name_error:
         USER_NAME = ""
 print(f"[MEM] Nombre del usuario: {USER_NAME or '(no detectado)'}")
+
+
+def refresh_user_name() -> str:
+    """Sincroniza USER_NAME con SQLite (fuente unica) y lo devuelve.
+
+    Si SQLite no responde, usa ``emma_state`` como respaldo. Nunca deja el
+    global con un valor distinto al almacenado.
+    """
+    global USER_NAME
+    current: Optional[str] = None
+    if EMMA_MEMORY_AVAILABLE:
+        try:
+            current = str(emma_memory.get_user_name() or "").strip()
+        except Exception as memory_error:
+            print(f"[MEM] No se pudo leer el nombre de SQLite: {memory_error}")
+    if current is None and EMMA_STATE_AVAILABLE:
+        try:
+            current = str(emma_state.get_user_name() or "").strip()
+        except Exception as state_error:
+            print(f"[MEM] No se pudo leer el nombre de emma_state: {state_error}")
+    if current is None:
+        return USER_NAME
+    if current != USER_NAME:
+        print(f"[MEM] Nombre sincronizado: {current or '(no detectado)'}")
+        USER_NAME = current
+    return USER_NAME
+
+
 AUDIO_SAMPLE_RATE = AUDIO_CONFIG.get("sample_rate", 16000)
 HALF_DUPLEX = AUDIO_CONFIG.get("half_duplex", True)
 FULL_DUPLEX = bool(AUDIO_CONFIG.get("full_duplex", not HALF_DUPLEX))
@@ -976,6 +1010,9 @@ def get_system_prompt_with_context(
     memories: Optional[List[str]] = None,
     turn_language: Optional[str] = None,
 ) -> str:
+    # El prompt debe usar siempre el nombre guardado en SQLite, aunque otro
+    # proceso lo haya cambiado desde el ultimo turno.
+    refresh_user_name()
     if not SYSTEM_PROMPT:
         base_prompt = (
             "Eres Emma, tutora bilingue de ingles/espanol amable. "
@@ -2142,6 +2179,7 @@ def handle_profile_request(
     turn_start: Optional[float] = None,
 ):
     """Contesta '¿cómo me llamo?' desde el perfil, sin LLM."""
+    refresh_user_name()
     reply = answer_profile_question(
         user_text, USER_NAME, user_language or active_language
     )
@@ -2328,7 +2366,7 @@ def run_turn(turn_num: int, mic_stream, memoria):
                     USER_NAME = ""
                 detected_name = emma_state.detect_user_name(user_text)
                 if detected_name and detected_name != USER_NAME:
-                    USER_NAME = str(emma_state.set_user_name(detected_name))
+                    USER_NAME = str(emma_state.set_user_name(detected_name) or "")
                     print(f"[MEM] Usuario se llama ahora: {USER_NAME}")
             except Exception as name_error:
                 print(f"[MEM] Error detectando nombre: {name_error}")
@@ -2942,7 +2980,7 @@ def main():
                                 USER_NAME = ""
                             detected_name = emma_state.detect_user_name(user_text)
                             if detected_name and detected_name != USER_NAME:
-                                USER_NAME = str(emma_state.set_user_name(detected_name))
+                                USER_NAME = str(emma_state.set_user_name(detected_name) or "")
                                 print(f"[MEM] Usuario se llama ahora: {USER_NAME}")
                         except Exception as name_error:
                             print(f"[MEM] Error detectando nombre: {name_error}")
