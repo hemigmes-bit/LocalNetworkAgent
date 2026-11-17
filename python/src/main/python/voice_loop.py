@@ -565,11 +565,18 @@ def ensure_ollama_local(url: str, timeout_s: float = 20.0) -> bool:
     print(f"   Ollama no responde. Arrancando: {exe} serve")
     try:
         flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
+        # El servidor debe arrancar con la misma configuracion de VRAM que
+        # espera Emma: flash attention y KV cache q8_0. Sin esto, un contexto
+        # de 10240 tokens reserva el doble de KV cache y puede ir a CPU/OOM.
+        child_env = os.environ.copy()
+        child_env.setdefault("OLLAMA_FLASH_ATTENTION", "1")
+        child_env.setdefault("OLLAMA_KV_CACHE_TYPE", "q8_0")
         subprocess.Popen(
             [exe, "serve"],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             creationflags=flags,
+            env=child_env,
         )
     except Exception as error:
         print(f"   No se pudo arrancar Ollama: {error}")
