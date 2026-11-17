@@ -43,6 +43,16 @@ from typing import Deque, List, Dict, Any, Optional
 PROJECT_ROOT = Path(__file__).parent.parent.parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT / "python" / "src" / "main" / "python"))
 
+# La salida puede acabar en una consola cp1252 o en un log redirigido. Whisper
+# devuelve a veces caracteres fuera de Latin-1 (chino, emoji) y un simple
+# print tumbaba el motor con UnicodeEncodeError. UTF-8 con reemplazo evita
+# que una transcripcion rara mate a Emma.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 from emma_patches import answer_profile_question, strip_vocative, verify_corrections
 
 # Cargar configuracion YAML

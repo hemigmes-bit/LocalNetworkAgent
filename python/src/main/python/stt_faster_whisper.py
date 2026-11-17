@@ -8,6 +8,7 @@ transcripcion con mejor puntuacion.
 from faster_whisper import WhisperModel
 import numpy as np
 import re
+import sys
 import time
 import unicodedata
 
@@ -74,6 +75,22 @@ def is_hallucination(
     return False
 
 
+def _safe_text(text: str, limit: int = 50) -> str:
+    """Recorta texto sin romper la consola.
+
+    La salida de Emma puede acabar en una consola cp1252 (o en un archivo
+    redirigido). Whisper a veces devuelve caracteres fuera de Latin-1; si se
+    imprimen tal cual, Python lanza UnicodeEncodeError y mata el motor.
+    """
+    value = str(text or "")[:limit]
+    encoding = getattr(sys.stdout, "encoding", None) or "utf-8"
+    try:
+        value.encode(encoding)
+        return value
+    except (UnicodeEncodeError, LookupError):
+        return value.encode(encoding, "replace").decode(encoding, "replace")
+
+
 def _selftest() -> None:
     # Alucinaciones tipicas: poca voz y mala confianza.
     for text in (
@@ -126,7 +143,10 @@ class FasterWhisperSTT:
 
         if is_hallucination(text, avg_logprob, no_speech):
             if text.strip():
-                print(f"   [STT] Descartado (alucinacion): '{text[:50]}...'")
+                print(
+                    "   [STT] Descartado (alucinacion): "
+                    f"'{_safe_text(text)}...'"
+                )
             text = ""
             score = -10.0
 
@@ -194,7 +214,7 @@ class FasterWhisperSTT:
             mode = f"detectado ({first['language']}), corregido a {fallback_used}"
         else:
             mode = "detectado"
-        print(f"   [STT] {elapsed:.0f}ms - '{text[:50]}...' ({mode}: {detected_language})")
+        print(f"   [STT] {elapsed:.0f}ms - '{_safe_text(text)}...' ({mode}: {detected_language})")
         return text, detected_language, forced
 
 
