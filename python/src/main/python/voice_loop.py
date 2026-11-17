@@ -43,7 +43,7 @@ from typing import Deque, List, Dict, Any, Optional
 PROJECT_ROOT = Path(__file__).parent.parent.parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT / "python" / "src" / "main" / "python"))
 
-from emma_patches import verify_corrections
+from emma_patches import answer_profile_question, verify_corrections
 
 # Cargar configuracion YAML
 try:
@@ -2046,6 +2046,8 @@ def handle_voice_request(
     stt_ms: float,
     user_language: str,
     active_language: str,
+    turn_num: int = 0,
+    turn_start: Optional[float] = None,
 ):
     """Cambia la voz si el usuario lo pide, sin pasar por el LLM."""
     if not EMMA_STATE_AVAILABLE:
@@ -2099,6 +2101,63 @@ def handle_voice_request(
     if not FULL_DUPLEX:
         time.sleep(POST_TTS_DELAY_MS / 1000.0)
 
+    if turn_start is None:
+        turn_start = time.perf_counter()
+    if not turn_num:
+        turn_num = len(turn_results) + 1
+    total_ms = (time.perf_counter() - turn_start) * 1000
+    result = TurnResult(
+        turn=turn_num,
+        stt_ms=stt_ms,
+        llm_first_token_ms=0.0,
+        llm_full_ms=0.0,
+        tts_first_ms=tts_first_ms,
+        total_ms=total_ms,
+        user_text=user_text,
+        assistant_spoken=spoken,
+        assistant_language=language,
+        corrections=[],
+        vocabulary=[],
+        user_language=user_language,
+        learning={},
+    )
+    add_turn_to_history(user_text, spoken, language)
+    turn_results.append(result)
+    return result
+
+
+def handle_profile_request(
+    user_text: str,
+    stt_ms: float,
+    user_language: str,
+    active_language: str,
+    turn_num: int = 0,
+    turn_start: Optional[float] = None,
+):
+    """Contesta '¿cómo me llamo?' desde el perfil, sin LLM."""
+    reply = answer_profile_question(
+        user_text, USER_NAME, user_language or active_language
+    )
+    if reply is None:
+        return None
+
+    spoken, language = reply["spoken"], reply["language"]
+    print(f"   [PERFIL] Pregunta de nombre -> '{spoken}' ({language})")
+    ui_emit("assistant", spoken)
+    ui_emit("status", "Emma está hablando.")
+    try:
+        tts_first_ms, _tts_ms = speak_text(spoken, language)
+    except Exception as tts_error:
+        print(f"   [PERFIL] Error hablando: {tts_error}")
+        return None
+
+    if not FULL_DUPLEX:
+        time.sleep(POST_TTS_DELAY_MS / 1000.0)
+
+    if turn_start is None:
+        turn_start = time.perf_counter()
+    if not turn_num:
+        turn_num = len(turn_results) + 1
     total_ms = (time.perf_counter() - turn_start) * 1000
     result = TurnResult(
         turn=turn_num,
@@ -2126,6 +2185,8 @@ def handle_song_request(
     user_language: str,
     active_language: str,
     mic_stream,
+    turn_num: int = 0,
+    turn_start: Optional[float] = None,
 ):
     """Graba unos segundos, identifica la cancion y responde sin pasar por el LLM."""
     if not SONG_ENABLED or song_recognizer is None:
@@ -2177,6 +2238,10 @@ def handle_song_request(
         print(f"   [CANCIONES] Error en TTS: {exc}")
         tts_first_ms, tts_ms = 0.0, 0.0
 
+    if turn_start is None:
+        turn_start = time.perf_counter()
+    if not turn_num:
+        turn_num = len(turn_results) + 1
     total_ms = (time.perf_counter() - turn_start) * 1000
     result = TurnResult(
         turn=turn_num,
@@ -2308,12 +2373,27 @@ def run_turn(turn_num: int, mic_stream, memoria):
 
         ui_emit("user", user_text)
 
+        # Preguntas sobre el nombre ("¿cómo me llamo?"): respuesta directa
+        # desde el perfil guardado, sin LLM y sin riesgo de inventarlo.
+        profile_result = handle_profile_request(
+            user_text,
+            stt_ms,
+            user_language,
+            active_language,
+            turn_num,
+            turn_start,
+        )
+        if profile_result is not None:
+            return profile_result
+
         # Cambio de voz bajo demanda: respuesta directa, sin pasar por el LLM.
         voice_result = handle_voice_request(
             user_text,
             stt_ms,
             user_language,
             active_language,
+            turn_num,
+            turn_start,
         )
         if voice_result is not None:
             return voice_result
@@ -2326,6 +2406,8 @@ def run_turn(turn_num: int, mic_stream, memoria):
                 user_language,
                 active_language,
                 mic_stream,
+                turn_num,
+                turn_start,
             )
             if song_result is not None:
                 return song_result
@@ -2887,6 +2969,15 @@ def main():
                     )
                     
                     ui_emit("user", user_text)
+
+                    # Preguntas sobre el nombre ("¿cómo me llamo?"): respuesta
+                    # directa desde el perfil guardado, sin LLM.
+                    profile_result = handle_profile_request(
+                        user_text, stt_ms, detected_lang, active_language
+                    )
+                    if profile_result is not None:
+                        vad_iter.reset_states()
+                        continue
 
                     # Consultas de memoria ("qué toca repasar", "qué sabes de mí",
                     # "qué hablamos sobre X"): respuesta directa con herramientas

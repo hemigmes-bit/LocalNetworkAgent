@@ -20,7 +20,7 @@ import re
 import unicodedata
 from typing import Any, Dict, Iterable, List, Sequence, Tuple
 
-__all__ = ["verify_corrections", "normalize_text"]
+__all__ = ["answer_profile_question", "verify_corrections", "normalize_text"]
 
 _WORD_RE = re.compile(r"[^\W\d_]+", re.UNICODE)
 _NON_WORD_RE = re.compile(r"[^\w\s]", re.UNICODE)
@@ -171,6 +171,68 @@ def verify_corrections(
     return kept, dropped
 
 
+_PROFILE_NAME_ES_RE = re.compile(
+    r"\b(?:como me llamo(?: yo)?|cual es mi nombre|"
+    r"sabes (?:como me llamo|mi nombre)|"
+    r"(?:te acuerdas|te acordas|recuerdas) (?:de )?mi nombre|"
+    r"dime mi nombre|quien soy)\b",
+    re.IGNORECASE,
+)
+_PROFILE_NAME_EN_RE = re.compile(
+    r"\b(?:what (?:is|was) my name|what s my name|whats my name|"
+    r"do you (?:know|remember) my name|"
+    r"what am i called|tell me my name|who am i)\b",
+    re.IGNORECASE,
+)
+
+
+def answer_profile_question(
+    user_text: str,
+    user_name: Any,
+    language: str = "",
+) -> Dict[str, str] | None:
+    """Contesta preguntas sobre el nombre del usuario sin llamar al LLM.
+
+    Devuelve ``{"spoken": ..., "language": "es"|"en"}`` cuando el turno es
+    una pregunta de perfil ("¿cómo me llamo?", "what's my name?"). Devuelve
+    ``None`` en cualquier otro caso para que siga el flujo normal.
+
+    Si todavia no hay nombre guardado, pide el nombre en vez de inventarlo.
+    """
+    normalized = normalize_text(user_text)
+    if not normalized:
+        return None
+
+    spanish = bool(_PROFILE_NAME_ES_RE.search(normalized))
+    english = bool(_PROFILE_NAME_EN_RE.search(normalized))
+    if not spanish and not english:
+        return None
+
+    # El idioma de la pregunta manda sobre la preferencia guardada: si el
+    # usuario pregunta en espanol, la respuesta sale en espanol.
+    if english and not spanish:
+        reply_language = "en"
+    elif spanish and not english:
+        reply_language = "es"
+    else:
+        requested = str(language or "").strip().lower()
+        reply_language = "en" if requested.startswith("en") else "es"
+
+    name = _SPACE_RE.sub(" ", str(user_name or "")).strip(" .,!?\"'")
+    if not name:
+        if reply_language == "en":
+            spoken = "You haven't told me your name yet. What should I call you?"
+        else:
+            spoken = "Todavía no me has dicho tu nombre. ¿Cómo te llamas?"
+        return {"spoken": spoken, "language": reply_language}
+
+    if reply_language == "en":
+        spoken = f"Your name is {name}."
+    else:
+        spoken = f"Te llamas {name}."
+    return {"spoken": spoken, "language": reply_language}
+
+
 def _selftest() -> None:
     user = "I have not had any sleep at all. Okay. Sounds good"
     corrections = [
@@ -210,6 +272,28 @@ def _selftest() -> None:
     kept_empty, dropped_empty = verify_corrections("", corrections)
     assert kept_empty == []
     assert len(dropped_empty) == len(corrections)
+
+    # Preguntas de nombre: respuesta directa desde el perfil, sin LLM.
+    assert answer_profile_question("¿Cómo me llamo?", "Henry") == {
+        "spoken": "Te llamas Henry.", "language": "es",
+    }
+    assert answer_profile_question("¿Sabes cómo me llamo?", "Henry") == {
+        "spoken": "Te llamas Henry.", "language": "es",
+    }
+    assert answer_profile_question("What's my name?", "Henry") == {
+        "spoken": "Your name is Henry.", "language": "en",
+    }
+    assert answer_profile_question("Do you remember my name?", "Henry") == {
+        "spoken": "Your name is Henry.", "language": "en",
+    }
+    # No debe dispararse cuando el usuario se presenta ni cuando pregunta
+    # por el nombre de Emma.
+    assert answer_profile_question("My name is Henry", "Henry") is None
+    assert answer_profile_question("¿Cómo te llamas?", "Henry") is None
+    assert answer_profile_question("What is your name?", "Henry") is None
+    missing = answer_profile_question("¿Cómo me llamo?", "")
+    assert missing and missing["language"] == "es"
+    assert "nombre" in missing["spoken"]
 
     print("SELFTEST OK")
 
