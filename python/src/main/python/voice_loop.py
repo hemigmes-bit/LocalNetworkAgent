@@ -43,6 +43,8 @@ from typing import Deque, List, Dict, Any, Optional
 PROJECT_ROOT = Path(__file__).parent.parent.parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT / "python" / "src" / "main" / "python"))
 
+from emma_patches import verify_corrections
+
 # Cargar configuracion YAML
 try:
     import yaml
@@ -2509,6 +2511,9 @@ def run_turn(turn_num: int, mic_stream, memoria):
                 parsed = json.loads(json_str)
                 parsed_spoken = parsed.get("spoken", full_response)
                 corrections = parsed.get("corrections", []) or []
+                corrections, _dropped = verify_corrections(user_text, corrections)
+                for _item, _reason in _dropped:
+                    print(f"   [CORR] descartada ({_reason}): {str(_item)[:80]}")
                 vocabulary = parsed.get("vocabulary", []) or []
                 learning = parsed.get("learning") or {}
                 if not isinstance(learning, dict):
@@ -3149,6 +3154,9 @@ def main():
                             parsed = json.loads(full_response[json_start:json_end])
                             spoken = parsed.get("spoken", full_response)
                             corrections = parsed.get("corrections", []) or []
+                            corrections, _dropped = verify_corrections(user_text, corrections)
+                            for _item, _reason in _dropped:
+                                print(f"   [CORR] descartada ({_reason}): {str(_item)[:80]}")
                             vocabulary = parsed.get("vocabulary", []) or []
                             learning = parsed.get("learning") or {}
                             if not isinstance(learning, dict):

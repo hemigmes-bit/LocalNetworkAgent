@@ -14,7 +14,7 @@ llm:
   repeat_penalty: 1.08         # evita repetir frases y muletillas
   max_tokens: 480              # margen para razonamientos sin truncar
   keep_alive: "30m"            # mantiene el modelo caliente entre turnos
-  num_ctx: 8192                # contexto suficiente y deja VRAM libre para el modelo de 9B
+  num_ctx: 10240              # +25% contexto manteniendo margen de VRAM en 8 GB
 history:
   max_turns: 10
 conversation:
