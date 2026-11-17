@@ -737,8 +737,7 @@ class MemoryStore:
                 for token in match.replace('"', "").split(" OR "):
                     pattern = f"%{token}%"
                     rows3 = db.execute(
-                        """SELECT user_text, assistant_text, created_at,
-                                  started_at, 0 AS score
+                        """SELECT user_text, assistant_text, created_at, 0 AS score
                              FROM turns
                              WHERE user_text LIKE ? OR assistant_text LIKE ?
                              ORDER BY id DESC LIMIT ?""",
@@ -752,7 +751,7 @@ class MemoryStore:
                         results.append({
                             "user_text": str(row["user_text"])[:300],
                             "assistant_text": str(row["assistant_text"])[:300],
-                            "date": str(row["started_at"] or row["created_at"] or "")[:10],
+                            "date": str(row["created_at"] or "")[:10],
                         })
                         if len(results) >= limit:
                             break

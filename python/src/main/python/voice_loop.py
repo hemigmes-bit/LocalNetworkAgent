@@ -876,23 +876,67 @@ def is_story_request(text: str) -> bool:
     return any(re.search(pattern, folded) for pattern in _STORY_PATTERNS)
 
 
+_EN_STOPWORDS = {
+    "the", "and", "you", "your", "to", "of", "in", "for", "is", "are",
+    "was", "were", "am", "do", "does", "did", "can", "could", "would",
+    "should", "what", "how", "where", "when", "why", "who", "which", "my",
+    "we", "they", "it", "this", "that", "i", "an", "have", "has", "had",
+    "hello", "hi", "hey", "thanks", "please", "want", "need", "know", "say",
+    "tell", "time", "today", "tomorrow", "yesterday", "house", "car",
+    "work", "with", "about", "from", "there", "here", "not", "yes",
+}
+
+_ES_STOPWORDS = {
+    "el", "la", "los", "las", "un", "una", "unos", "unas", "y", "o", "pero",
+    "que", "como", "cuando", "donde", "porque", "por", "para", "con", "sin",
+    "es", "son", "era", "fue", "ser", "estar", "estoy", "esta", "estan",
+    "mi", "mis", "tu", "tus", "su", "sus", "te", "se", "lo", "le", "nos",
+    "yo", "nosotros", "ellos", "ella", "hola", "gracias", "quiero",
+    "puedes", "puede", "dime", "sabes", "cuanto", "cuanta", "muy", "bien",
+    "mal", "hoy", "manana", "ayer", "tiempo", "casa", "coche", "trabajo",
+    "llamo", "nombre", "hablar", "hacer", "tengo", "tiene", "hay", "aqui",
+    "alli", "tambien", "solo", "ahora", "luego", "vez", "veces", "algo",
+    "nada", "todo", "mucho", "poco", "si",
+}
+
+_ES_STRONG_RE = re.compile("[\u00f1\u00bf\u00a1]")      # ñ ¿ ¡
+_ES_ACCENT_RE = re.compile("[\u00e1\u00e9\u00ed\u00f3\u00fa]")
+_EN_CONTRACTION_RE = re.compile(r"\b(?:don'?t|can'?t|won'?t|i'?m|it'?s|that'?s|what'?s|i'?ve|you'?re)\b")
+
+
+def _language_scores(text: str) -> tuple:
+    """Cuenta senales de ingles y espanol en un texto."""
+    lowered = str(text or "").lower()
+    normalized = unicodedata.normalize("NFKD", lowered)
+    normalized = "".join(ch for ch in normalized if not unicodedata.combining(ch))
+    words = re.findall(r"[a-z']+", normalized)
+    en = sum(1 for word in words if word in _EN_STOPWORDS)
+    es = sum(1 for word in words if word in _ES_STOPWORDS)
+    if _ES_STRONG_RE.search(lowered):
+        es += 3
+    if _ES_ACCENT_RE.search(lowered):
+        es += 1
+    if _EN_CONTRACTION_RE.search(lowered):
+        en += 2
+    return en, es
+
+
 def detect_language(text: str) -> str:
-    if not text:
-        return "es"
-    
-    english_indicators = sum(1 for word in text.lower().split() 
-                           if word in ['the', 'and', 'i', 'you', 'to', 'a', 'of', 'in', 'for', 'is'])
-    spanish_indicators = sum(1 for word in text.lower().split() 
-                            if word in ['el', 'la', 'y', 'lo', 'que', 'para', 'con', 'por', 'es', 'un'])
-    
-    if english_indicators > spanish_indicators * 1.5:
+    """Idioma del texto; usa los turnos previos del usuario si hay empate."""
+    en, es = _language_scores(text)
+    if en > es:
         return "en"
-    elif spanish_indicators > english_indicators * 1.5:
+    if es > en:
         return "es"
-    else:
-        if history.assistant_languages:
-            return history.assistant_languages[-1]
-        return "es"
+    # Turnos cortos ("como me llamo") no tienen senales suficientes: se mira
+    # el ultimo turno del usuario con idioma claro, nunca el de Emma.
+    for previous in reversed(history.user_texts):
+        pen, pes = _language_scores(previous)
+        if pen > pes:
+            return "en"
+        if pes > pen:
+            return "es"
+    return LANGUAGE_PREFERENCE or "es"
 
 def answer_language(
     active_language: str, spoken: str, model_language: Optional[str] = None
@@ -900,12 +944,20 @@ def answer_language(
     """Idioma final de la respuesta: el del turno salvo que el texto lo desmienta."""
     if LANGUAGE_MODE == "lock" and LANGUAGE_PREFERENCE:
         return LANGUAGE_PREFERENCE
+    # El idioma del turno manda. El modelo a veces etiqueta "en" una respuesta
+    # escrita en espanol; solo se acepta su etiqueta si el texto la respalda.
+    if active_language in ("en", "es"):
+        if model_language in ("en", "es") and model_language != active_language:
+            en, es = _language_scores(spoken)
+            if (model_language == "en" and en > es) or (
+                model_language == "es" and es > en
+            ):
+                return model_language
+        return active_language
     if model_language in ("en", "es"):
         return model_language
     detected = detect_language(spoken)
-    if len(str(spoken).split()) < 3:
-        return active_language or detected
-    return detected or active_language
+    return detected or active_language or "es"
 
 
 def select_voice(language: str) -> str:
