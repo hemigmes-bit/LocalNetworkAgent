@@ -20,7 +20,12 @@ import re
 import unicodedata
 from typing import Any, Dict, Iterable, List, Sequence, Tuple
 
-__all__ = ["answer_profile_question", "verify_corrections", "normalize_text"]
+__all__ = [
+    "answer_profile_question",
+    "strip_vocative",
+    "verify_corrections",
+    "normalize_text",
+]
 
 _WORD_RE = re.compile(r"[^\W\d_]+", re.UNICODE)
 _NON_WORD_RE = re.compile(r"[^\w\s]", re.UNICODE)
@@ -233,6 +238,61 @@ def answer_profile_question(
     return {"spoken": spoken, "language": reply_language}
 
 
+# Vocativo dirigido a Emma. Solo se elimina para decidir si el turno necesita
+# herramientas: el texto que ve el LLM se queda intacto.
+_VOCATIVE_GREETING_RE = re.compile(
+    r"^(?:oye|hey|hola|hi|hello|ey|eh|escucha|mira)\b[\s,:;.!?-]*",
+    re.IGNORECASE,
+)
+_VOCATIVE_HEAD_RE = re.compile(
+    r"^emma\b[\s,:;.!?\u2013-]*",
+    re.IGNORECASE,
+)
+_VOCATIVE_TAIL_RE = re.compile(
+    r"[,;:]\s*\bemma\s*[.!?]*\s*$",
+    re.IGNORECASE,
+)
+_VOCATIVE_ONLY_RE = re.compile(r"^emma\s*[.!?,;:]*$", re.IGNORECASE)
+
+
+def strip_vocative(text: Any) -> str:
+    """Quita el vocativo "Emma" del principio o del final del turno.
+
+    Sirve para que la decision de usar herramientas no dependa del saludo:
+    "Emma, busca el tiempo" y "busca el tiempo" deben analizarse igual. El
+    texto original se conserva para el LLM, las correcciones y la memoria.
+    """
+    value = _SPACE_RE.sub(" ", str(text or "")).strip()
+    if not value:
+        return ""
+    # "Emma" / "Emma!" a solas: no queda peticion que analizar.
+    if _VOCATIVE_ONLY_RE.match(value):
+        return ""
+
+    # "Oye Emma, ..." / "Hola Emma ..." -> quita el saludo y el nombre.
+    greeting = _VOCATIVE_GREETING_RE.match(value)
+    if greeting:
+        after_greeting = value[greeting.end():].lstrip()
+        if _VOCATIVE_HEAD_RE.match(after_greeting):
+            value = after_greeting
+
+    # "Emma, ..." / "Emma ..." (y repeticiones tipo "Emma, Emma, ...").
+    for _ in range(3):
+        head = _VOCATIVE_HEAD_RE.match(value)
+        if not head:
+            break
+        value = value[head.end():].strip()
+        if not value:
+            return ""
+
+    # "..., Emma?" -> se conserva el cuerpo de la peticion.
+    without_tail = _VOCATIVE_TAIL_RE.sub("", value).strip()
+    if without_tail:
+        value = without_tail
+
+    return value.strip(" ,;:-–—")
+
+
 def _selftest() -> None:
     user = "I have not had any sleep at all. Okay. Sounds good"
     corrections = [
@@ -294,6 +354,22 @@ def _selftest() -> None:
     missing = answer_profile_question("¿Cómo me llamo?", "")
     assert missing and missing["language"] == "es"
     assert "nombre" in missing["spoken"]
+
+    # Vocativo: la decision de herramientas no debe depender de "Emma".
+    assert strip_vocative("Emma, busca el tiempo en Madrid") == "busca el tiempo en Madrid"
+    assert strip_vocative("emma busca el tiempo") == "busca el tiempo"
+    assert strip_vocative("Oye Emma, ¿qué hora es?") == "¿qué hora es?"
+    assert strip_vocative("Hola Emma") == ""
+    assert strip_vocative("Emma") == ""
+    assert strip_vocative("Emma!") == ""
+    assert strip_vocative("¿Qué hora es, Emma?") == "¿Qué hora es"
+    assert strip_vocative("Emma, Emma, dime las noticias") == "dime las noticias"
+    # Sin vocativo no se toca nada.
+    assert strip_vocative("busca el tiempo") == "busca el tiempo"
+    assert strip_vocative("qué sabes de Emma") == "qué sabes de Emma"
+    assert strip_vocative("dile a Emma que venga") == "dile a Emma que venga"
+    # "Emmanuel" no es el vocativo "Emma".
+    assert strip_vocative("Emmanuel, busca el tiempo") == "Emmanuel, busca el tiempo"
 
     print("SELFTEST OK")
 

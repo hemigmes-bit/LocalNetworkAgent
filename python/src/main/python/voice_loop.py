@@ -43,7 +43,7 @@ from typing import Deque, List, Dict, Any, Optional
 PROJECT_ROOT = Path(__file__).parent.parent.parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT / "python" / "src" / "main" / "python"))
 
-from emma_patches import answer_profile_question, verify_corrections
+from emma_patches import answer_profile_question, strip_vocative, verify_corrections
 
 # Cargar configuracion YAML
 try:
@@ -2509,13 +2509,15 @@ def run_turn(turn_num: int, mic_stream, memoria):
         # --- ETAPA 3a: herramientas web/memoria (solo si la pregunta lo requiere) ---
         tool_messages = []
         tool_used = []
-        if TOOLS_ENABLED and not story_mode and emma_tools.needs_tools(user_text):
+        # El vocativo ("Emma, ...") no debe decidir si hacen falta herramientas.
+        tool_text = strip_vocative(user_text)
+        if TOOLS_ENABLED and not story_mode and emma_tools.needs_tools(tool_text):
             print("   [TOOLS] Consultando herramientas...")
             ui_emit("status", "Consultando fuentes…")
             tools_started = time.perf_counter()
             try:
                 tool_result = emma_tools.gather_tool_context(
-                    user_text,
+                    tool_text,
                     lang=detected_lang or active_language or "es",
                     model=OLLAMA_MODEL,
                     url=OLLAMA_URL,
@@ -3103,13 +3105,15 @@ def main():
                     # Herramientas web/memoria (solo si la pregunta lo requiere)
                     tool_messages = []
                     tool_used = []
-                    if TOOLS_ENABLED and not story_mode and emma_tools.needs_tools(user_text):
+                    # El vocativo ("Emma, ...") no debe decidir si hacen falta herramientas.
+                    tool_text = strip_vocative(user_text)
+                    if TOOLS_ENABLED and not story_mode and emma_tools.needs_tools(tool_text):
                         print("   [TOOLS] Consultando herramientas...")
                         ui_emit("status", "Consultando fuentes…")
                         tools_started = time.perf_counter()
                         try:
                             tool_result = emma_tools.gather_tool_context(
-                                user_text,
+                                tool_text,
                                 lang=detected_lang or active_language or "es",
                                 model=OLLAMA_MODEL,
                                 url=OLLAMA_URL,
