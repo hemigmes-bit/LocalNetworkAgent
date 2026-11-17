@@ -67,6 +67,13 @@ except Exception as e:
 # Configuracion
 CONFIG = CONFIG or {}
 SYSTEM_PROMPT = CONFIG.get("system_prompt", "")
+# El prompt se puede cambiar sin tocar codigo: v1 (largo, 4.6k) o v2 (corto,
+# 1.6k). La v2 depende del esquema JSON que se envia en "format".
+SYSTEM_PROMPT_VERSION = int(CONFIG.get("system_prompt_version", 1) or 1)
+if SYSTEM_PROMPT_VERSION == 2:
+    _short_prompt = str(CONFIG.get("system_prompt_v2") or "").strip()
+    if _short_prompt:
+        SYSTEM_PROMPT = _short_prompt
 LLM_CONFIG = CONFIG.get("llm", {})
 STT_CONFIG = CONFIG.get("stt", {})
 VAD_CONFIG = CONFIG.get("vad", {})
@@ -996,23 +1003,36 @@ def detect_language(text: str) -> str:
 def answer_language(
     active_language: str, spoken: str, model_language: Optional[str] = None
 ) -> str:
-    """Idioma final de la respuesta: el del turno salvo que el texto lo desmienta."""
+    """Idioma final de la respuesta: el del turno salvo que el texto lo desmienta.
+
+    Regla: partimos de active_language (idioma del turno, Whisper o preferencia).
+    Solo pasamos a la etiqueta del modelo si el texto la respalda con _language_scores.
+    Si tampoco, usamos el idioma detectado en el propio texto.
+    """
     if LANGUAGE_MODE == "lock" and LANGUAGE_PREFERENCE:
         return LANGUAGE_PREFERENCE
-    # El idioma del turno manda. El modelo a veces etiqueta "en" una respuesta
-    # escrita en espanol; solo se acepta su etiqueta si el texto la respalda.
-    if active_language in ("en", "es"):
-        if model_language in ("en", "es") and model_language != active_language:
-            en, es = _language_scores(spoken)
-            if (model_language == "en" and en > es) or (
-                model_language == "es" and es > en
-            ):
-                return model_language
+
+    # 1. Partimos de active_language (idioma del turno).
+    # 2. Solo aceptamos la etiqueta del modelo si el texto la respalda.
+    if active_language in ("en", "es") and model_language in ("en", "es"):
+        en, es = _language_scores(spoken)
+        # Si el modelo dice distinto y el texto lo respalda, lo aceptamos.
+        if (model_language == "en" and en > es) or (
+            model_language == "es" and es > en
+        ):
+            return model_language
         return active_language
-    if model_language in ("en", "es"):
-        return model_language
+
+    # 3. active_language no es en/es o modelo no es en/es:
+    #   Usamos el idioma que realmente tiene el texto, con _language_scores.
     detected = detect_language(spoken)
-    return detected or active_language or "es"
+    en, es = _language_scores(spoken)
+    if detected == "en" and en >= es:
+        return "en"
+    if detected == "es" and es > en:
+        return "es"
+    # Fallback: active_language si existe, sino es.
+    return active_language or "es"
 
 
 def select_voice(language: str) -> str:
@@ -2901,6 +2921,7 @@ def main():
     print("Emma Bilingue - Full Duplex Continuous Mode")
     print("="*60)
     print(f"Model: {OLLAMA_MODEL} (local Ollama)")
+    print(f"Prompt: v{SYSTEM_PROMPT_VERSION} ({len(SYSTEM_PROMPT)} caracteres)")
     print(f"History: {MAX_HISTORY} turns")
     print(f"VAD threshold: {VAD_THRESHOLD}")
     print(f"TTS voices: en={TTS_ENGLISH_VOICE}, es={TTS_SPANISH_VOICE} (perfil {VOICE_PROFILE_ID}, speed {TTS_SPEED:.2f})")
