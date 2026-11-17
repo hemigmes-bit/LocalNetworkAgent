@@ -95,6 +95,7 @@ audio:
   barge_in_min_ms: 250      # voz sostenida necesaria para interrumpir
   barge_in_echo_margin: 1.5 # cuanto mas fuerte que su propio eco debes sonar
   barge_in_min_rms: 0.010   # energia minima absoluta para considerar voz
+  barge_in_echo_gain: 0.13  # acoplamiento medido altavoz->micro (0.065 medido)
   barge_in_warmup_ms: 250   # margen tras empezar cada frase (evita autoeccos)
   post_tts_delay_ms: 500
   voice_rms_floor: 0.010    # energia minima para renovar el temporizador de silencio

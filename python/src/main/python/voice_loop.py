@@ -305,6 +305,7 @@ BARGE_IN_MIN_MS = int(AUDIO_CONFIG.get("barge_in_min_ms", 300))
 BARGE_IN_ECHO_MARGIN = float(AUDIO_CONFIG.get("barge_in_echo_margin", 2.2))
 BARGE_IN_WARMUP_MS = int(AUDIO_CONFIG.get("barge_in_warmup_ms", 250))
 BARGE_IN_MIN_RMS = float(AUDIO_CONFIG.get("barge_in_min_rms", 0.012))
+BARGE_IN_ECHO_GAIN = float(AUDIO_CONFIG.get("barge_in_echo_gain", 0.13))
 POST_TTS_DELAY_MS = AUDIO_CONFIG.get("post_tts_delay_ms", 500)
 
 # Audio que el usuario ya ha dicho mientras Emma hablaba. Se reutiliza como
@@ -424,6 +425,7 @@ class BargeInDetector:
         echo_margin=2.2,
         warmup_ms=250,
         min_rms=0.012,
+        echo_gain=0.13,
     ):
         self.model = model
         self.sample_rate = sample_rate
@@ -432,6 +434,11 @@ class BargeInDetector:
         self.echo_margin = float(echo_margin)
         self.warmup_ms = int(warmup_ms)
         self.min_rms = float(min_rms)
+        # Cuanto de la senal reproducida acaba en el micro. Con auriculares es
+        # casi cero, pero aqui se usa como suelo para no confundir la propia
+        # voz de Emma con el usuario.
+        self.echo_gain = float(echo_gain)
+        self.playback_rms = 0.0
         self.frame_ms = 32
         self.rearm()
         self.push_count = 0
@@ -461,7 +468,7 @@ class BargeInDetector:
         except Exception:
             return 0.0
 
-    def push(self, x) -> bool:
+    def push(self, x, playback_rms=None) -> bool:
         """Anade un frame de 32 ms. Devuelve True si hay que interrumpir.
 
         Se exigen dos condiciones sostenidas: que el VAD reconozca voz y que
@@ -470,6 +477,9 @@ class BargeInDetector:
         """
         x = np.asarray(x, dtype=np.float32).reshape(-1)
         rms = float(np.sqrt(np.mean(x ** 2))) if x.size else 0.0
+        if playback_rms is None:
+            playback_rms = self.playback_rms
+        playback_rms = max(0.0, float(playback_rms))
 
         # Los primeros milisegundos de cada frase solo sirven para medir el eco.
         if self.warmup_left > 0:
@@ -477,12 +487,12 @@ class BargeInDetector:
             self.history.append(rms)
             return False
 
-        # Percentil bajo del ultimo segundo: el eco de Emma esta casi siempre,
-        # la voz del usuario solo a ratos. Asi el umbral no se dispara con ella.
-        echo_floor = (
-            float(np.percentile(self.history, 25)) if self.history else 0.0
-        )
-        threshold_rms = max(self.min_rms, echo_floor * self.echo_margin)
+        # El eco de Emma es predecible si sabemos a que nivel suena: el umbral
+        # crece con la reproduccion (acoplamiento estimado por echo_gain, mas
+        # el margen de seguridad). Con auriculares no hay eco, pero el suelo
+        # evita que un altavoz alto se confunda con el usuario.
+        playback_floor = playback_rms * self.echo_gain * self.echo_margin
+        threshold_rms = max(self.min_rms, playback_floor)
         self.history.append(rms)
 
         is_voice = self._prob(x) >= self.threshold
@@ -506,7 +516,8 @@ class BargeInDetector:
         self.push_count += 1
         if self.push_count % 4 == 0:
             _barge_debug(
-                f"push rms={rms:.4f} voice_ms={self.voice_ms:.0f} "
+                f"push rms={rms:.4f} pb={playback_rms:.4f} "
+                f"voice_ms={self.voice_ms:.0f} "
                 f"loud_ms={self.loud_ms:.0f} thr={threshold_rms:.4f} "
                 f"v_ok={self.voice_ms >= self.min_speech_ms} "
                 f"l_ok={self.loud_ms >= self.min_speech_ms}"
@@ -697,6 +708,7 @@ try:
                 echo_margin=BARGE_IN_ECHO_MARGIN,
                 warmup_ms=BARGE_IN_WARMUP_MS,
                 min_rms=BARGE_IN_MIN_RMS,
+                echo_gain=BARGE_IN_ECHO_GAIN,
             )
             print("Barge-in listo (full duplex)")
         except Exception as barge_error:
@@ -1493,6 +1505,9 @@ class StreamingTTS:
         self.interrupted = threading.Event()
         self.playback_started = threading.Event()
         self.playback_epoch = 0
+        # Nivel RMS del bloque que suena ahora, para distinguir el eco de la
+        # voz del usuario en el detector de barge-in.
+        self.playback_rms = 0.0
 
     def start(self):
         """Inicia el hilo de reproducción."""
@@ -1500,6 +1515,7 @@ class StreamingTTS:
         self.interrupted.clear()
         self.playback_started.clear()
         self.playback_epoch = 0
+        self.playback_rms = 0.0
         self.playing = True
         self.thread = threading.Thread(target=self._playback_loop, daemon=True)
         self.thread.start()
@@ -1526,6 +1542,7 @@ class StreamingTTS:
         if self.thread:
             self.thread.join(timeout=timeout)
         self.playing = False
+        self.playback_rms = 0.0
 
     def is_done(self):
         """True cuando no quedan frases por sintetizar ni reproducir."""
@@ -1562,12 +1579,18 @@ class StreamingTTS:
             dtype="float32",
             device=getattr(tts, "output_device", None),
         )
-        with stream:
-            for start in range(0, audio.size, block):
-                if self.stop_event.is_set() or self.interrupted.is_set():
-                    break
-                chunk = audio[start:start + block]
-                stream.write(chunk.reshape(-1, 1))
+        try:
+            with stream:
+                for start in range(0, audio.size, block):
+                    if self.stop_event.is_set() or self.interrupted.is_set():
+                        break
+                    chunk = audio[start:start + block]
+                    self.playback_rms = (
+                        float(np.sqrt(np.mean(chunk ** 2))) if chunk.size else 0.0
+                    )
+                    stream.write(chunk.reshape(-1, 1))
+        finally:
+            self.playback_rms = 0.0
 
     def _playback_loop(self):
         """Bucle de reproducción: saca texto de cola, sintetiza y reproduce."""
@@ -1805,7 +1828,7 @@ class LiveSpeech:
                 continue
 
             x = frame[:, 0] if frame.ndim == 2 else frame
-            if detector.push(x):
+            if detector.push(x, self.stream.playback_rms):
                 barge_triggered = True
                 barge_frames = detector.take_frames()
                 print("   [FULL DUPLEX] El usuario interrumpe: paro el TTS")
@@ -2059,7 +2082,7 @@ def speak_text(spoken: str, language: str):
             continue
 
         x = frame[:, 0] if frame.ndim == 2 else frame
-        if detector.push(x):
+        if detector.push(x, streaming_tts.playback_rms):
             barge_triggered = True
             barge_frames = detector.take_frames()
             print("   [FULL DUPLEX] El usuario interrumpe: paro el TTS")
@@ -2934,7 +2957,7 @@ def main():
                         current_speech._barge_epoch = current_speech.stream.playback_epoch
                         detector.rearm()
                     
-                    if detector.push(x):
+                    if detector.push(x, current_speech.stream.playback_rms):
                         print("   [FULL DUPLEX] Barge-in detectado: usuario interrumpe")
                         cancel_event.set()
                         if current_speech:
