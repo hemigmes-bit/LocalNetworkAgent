@@ -308,6 +308,39 @@ BARGE_IN_MIN_RMS = float(AUDIO_CONFIG.get("barge_in_min_rms", 0.012))
 BARGE_IN_ECHO_GAIN = float(AUDIO_CONFIG.get("barge_in_echo_gain", 0.13))
 POST_TTS_DELAY_MS = AUDIO_CONFIG.get("post_tts_delay_ms", 500)
 
+# Palabra clave: sin "Emma" no se abre un turno nuevo. Evita que Emma
+# conteste a conversaciones de la habitacion o a la television. Una
+# interrupcion (barge-in) y los mensajes escritos no la necesitan.
+WAKE_WORD_ENABLED = bool(AUDIO_CONFIG.get("wake_word", True))
+WAKE_FOLLOWUP_MS = int(AUDIO_CONFIG.get("wake_followup_ms", 20000))
+_WAKE_RE = re.compile(r"\b(emma|ema)\b", re.IGNORECASE)
+
+
+def mentions_wake_word(text: str) -> bool:
+    """True si el texto contiene el nombre de Emma como palabra suelta."""
+    return bool(_WAKE_RE.search(str(text or "")))
+
+
+def wake_word_allows(
+    text: str,
+    from_barge: bool = False,
+    now: Optional[float] = None,
+    wake_until: float = 0.0,
+) -> bool:
+    """Decide si un turno de voz puede abrir conversacion.
+
+    Los mensajes escritos no pasan por aqui. Una interrupcion en curso
+    siempre cuenta, y tras una respuesta hay una ventana de seguimiento.
+    """
+    if not WAKE_WORD_ENABLED or from_barge:
+        return True
+    if mentions_wake_word(text):
+        return True
+    current = time.time() if now is None else float(now)
+    return current < float(wake_until)
+
+
+
 # Audio que el usuario ya ha dicho mientras Emma hablaba. Se reutiliza como
 # inicio del siguiente turno para no perder sus primeras palabras.
 _barge_prebuffer: List[np.ndarray] = []
@@ -2917,6 +2950,10 @@ def main():
     cancel_event = threading.Event()
     done_event = threading.Event()
     holder = {}
+    # Palabra clave: instante hasta el que se aceptan seguimientos sin repetir
+    # "Emma", y si el turno en curso nacio de una interrupcion.
+    wake_until = 0.0
+    turn_from_barge = False
     
     # VAD iterator for continuous listening
     vad_iter = VADIterator(
@@ -2968,6 +3005,7 @@ def main():
                             user_audio_buffer = [f.copy() for f in barge_frames]
                             speech_started = True
                             last_vad_activity = time.perf_counter()
+                            turn_from_barge = True
                             _barge_debug(f"BARGE_TRIGGER frames={len(barge_frames)}")
                         current_speech = None
                         if current_producer:
@@ -2992,6 +3030,7 @@ def main():
                 if not speech_started:
                     speech_started = True
                     user_audio_buffer = []
+                    turn_from_barge = False
                     last_vad_activity = time.perf_counter()
                     print("   [VAD] Inicio de voz detectado")
             elif ev and "end" in ev and speech_started:
@@ -3045,6 +3084,20 @@ def main():
                             print("   [STT] Transcripción vacía")
                             vad_iter.reset_states()
                             continue
+
+                        # Palabra clave: sin "Emma" no se abre un turno nuevo.
+                        # Una interrupcion ya en curso no la necesita.
+                        if not wake_word_allows(
+                            user_text, turn_from_barge, wake_until=wake_until
+                        ):
+                            print(
+                                "   [WAKE] Ignorado (no dice 'Emma'): "
+                                f"'{user_text[:40]}'"
+                            )
+                            vad_iter.reset_states()
+                            continue
+                        turn_from_barge = False
+                        wake_until = time.time() + (WAKE_FOLLOWUP_MS / 1000.0)
 
                     print(f"   Usuario: '{user_text}' (idioma: {detected_lang}, STT: {stt_ms:.0f}ms)")
                     
@@ -3343,6 +3396,7 @@ def main():
                         if pending:
                             user_audio_buffer = [f.copy() for f in pending]
                             speech_started = True
+                            turn_from_barge = True
                             last_vad_activity = time.perf_counter()
                             print(f"   [FULL DUPLEX] Escuchando interrupcion ({len(pending)} frames)")
                         current_speech.stream.stop(timeout=2.0)
@@ -3441,6 +3495,8 @@ def main():
                     vad_iter.reset_states()
                     conversation_active = False
                     current_speech = None
+                    # Tras responder se aceptan seguimientos sin repetir "Emma".
+                    wake_until = time.time() + (WAKE_FOLLOWUP_MS / 1000.0)
                     ui_emit("status", "Escuchando…")
             
             # Pequeño sleep para no saturar CPU

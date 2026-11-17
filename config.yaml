@@ -98,6 +98,8 @@ audio:
   barge_in_echo_gain: 0.13  # acoplamiento medido altavoz->micro (0.065 medido)
   barge_in_warmup_ms: 250   # margen tras empezar cada frase (evita autoeccos)
   post_tts_delay_ms: 500
+  wake_word: true           # solo abre turno si dices "Emma" (evita contestar a la TV)
+  wake_followup_ms: 20000   # tras responder, acepta seguimientos sin repetir el nombre
   voice_rms_floor: 0.010    # energia minima para renovar el temporizador de silencio
 logging:
   latency_csv: logs/latency.csv
