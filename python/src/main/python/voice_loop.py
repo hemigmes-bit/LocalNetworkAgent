@@ -8169,8 +8169,6 @@ class ConversationWindow:
 
             accent = "#64748b"
 
-            card_border = "#e5eaf1"
-
             body_font = ("Segoe UI", 9)
 
         else:
@@ -8180,8 +8178,6 @@ class ConversationWindow:
             card_fg = "#18324b" if is_user else self.colors["text"]
 
             accent = "#1769aa" if is_user else "#16806a"
-
-            card_border = "#d7e6f4" if is_user else self.colors["border"]
 
             body_font = ("Segoe UI", 11)
 
@@ -8201,9 +8197,9 @@ class ConversationWindow:
 
             self.messages_frame, bg=card_bg,
 
-            highlightthickness=1,
+            highlightthickness=0,
 
-            highlightbackground=card_border,
+            borderwidth=0,
 
         )
 
