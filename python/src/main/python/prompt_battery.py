@@ -120,6 +120,7 @@ def build_prompt(version: int, turn_language: str, user_name: str = "Henry") -> 
         prompt += (
             f"\n\nMEMORIA DEL USUARIO: el usuario se llama \"{user_name}\". "
             f"Llámalo siempre \"{user_name}\" y nunca le pongas otro nombre. "
+            "No añadas apellidos ni nombres completos que no te haya dicho. "
             "Si dice que no es su nombre, discúlpate y pregúntale cómo se llama."
         )
     else:
@@ -285,6 +286,59 @@ CASES = [
         "max_sent": 4,
         "no_corrections": True,
         "unknown": True,
+    },
+    # Casos de regresión
+    {
+        "id": "fallo_idioma_mezcla",
+        "text": "Se dice así en español.",
+        "lang": "en",
+        "max_sent": 3,
+        "no_corrections": True,
+        "must_contain": "español",
+    },
+    {
+        "id": "fallo_correccion_falsa",
+        "text": "I have not had any sleep at all.",
+        "lang": "en",
+        "max_sent": 3,
+        "no_corrections": True,
+    },
+    {
+        "id": "fallo_promesa_audio",
+        "text": "Envíame un audio con la lección de hoy.",
+        "lang": "es",
+        "max_sent": 2,
+        "no_promise": True,
+    },
+    {
+        "id": "fallo_empatia",
+        "text": "Estoy muy triste, mi mascota ha fallecido.",
+        "lang": "es",
+        "max_sent": 3,
+        "empathy": True,
+        "no_corrections": True,
+    },
+    {
+        "id": "fallo_cuento_cierre",
+        "text": "Cuéntame un cuento que termine bien.",
+        "lang": "es",
+        "story": True,
+        "no_corrections": True,
+        "must_contain": "fin",
+    },
+    {
+        "id": "fallo_inventar_datos",
+        "text": "¿Quién dijo 'La vida es bella' en la película de 1997?",
+        "lang": "es",
+        "max_sent": 3,
+        "unknown": True,
+    },
+    {
+        "id": "fallo_clase_vs_razon",
+        "text": "¿Por qué es mejor usar 'a' en lugar de 'the' aquí?",
+        "lang": "es",
+        "max_sent": 5,
+        "no_corrections": True,
     },
 ]
 
