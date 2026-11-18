@@ -119,10 +119,11 @@ class FasterWhisperSTT:
     def __init__(self, model_size="base", device="cuda", compute_type="float16"):
         self.model = WhisperModel(model_size, device=device, compute_type=compute_type)
 
-    def _decode(self, audio, language, beam_size, vad_filter):
+    def _decode(self, audio, language, beam_size, vad_filter, hotwords=None):
         segments, info = self.model.transcribe(
             audio, language=language, vad_filter=vad_filter,
-            condition_on_previous_text=False, beam_size=max(1, int(beam_size))
+            condition_on_previous_text=False, beam_size=max(1, int(beam_size)),
+            hotwords=hotwords
         )
         segment_list = list(segments)
         text = " ".join(seg.text for seg in segment_list).strip()
@@ -166,6 +167,7 @@ class FasterWhisperSTT:
         vad_filter=True,
         fallback_languages=("es", "en"),
         auto_fallback=True,
+        hotwords=None,
     ):
         """Devuelve (texto, idioma_detectado, idioma_forzado).
 
@@ -178,7 +180,7 @@ class FasterWhisperSTT:
             audio = audio.astype(np.float32)
 
         forced = language is not None
-        first = self._decode(audio, language, beam_size, vad_filter)
+        first = self._decode(audio, language, beam_size, vad_filter, hotwords)
         detected_language = first["language"]
         chosen = first
         fallback_used = None
@@ -194,7 +196,7 @@ class FasterWhisperSTT:
         if needs_fallback:
             candidates = []
             for candidate_lang in allowed:
-                variant = self._decode(audio, candidate_lang, beam_size, vad_filter)
+                variant = self._decode(audio, candidate_lang, beam_size, vad_filter, hotwords)
                 variant["language"] = candidate_lang
                 candidates.append(variant)
             if candidates:

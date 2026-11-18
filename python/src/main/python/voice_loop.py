@@ -62,6 +62,8 @@ import queue
 
 import re
 
+import difflib
+
 import unicodedata
 
 import webbrowser
@@ -498,6 +500,10 @@ STT_VAD_FILTER = STT_CONFIG.get("vad_filter", True)
 
 STT_FALLBACK_LANGUAGES = tuple(STT_CONFIG.get("fallback_languages", ["es", "en"]))
 
+STT_HOTWORDS = STT_CONFIG.get("hotwords") or []
+if isinstance(STT_HOTWORDS, str):
+    STT_HOTWORDS = [STT_HOTWORDS]
+
 VAD_THRESHOLD = VAD_CONFIG.get("threshold", 0.5)
 
 VAD_MIN_SILENCE_MS = VAD_CONFIG.get("min_silence_duration_ms", 400)
@@ -556,6 +562,108 @@ def get_current_user_name() -> str:
     except Exception:
         pass
     return ""
+
+
+def build_stt_hotwords() -> str:
+    """Sesga el STT hacia el nombre del usuario y la palabra de activacion.
+
+    Whisper transcribe mal los nombres propios poco frecuentes ("Henry" ->
+    "Henrius"). Los hotwords se inyectan como texto previo y el decodificador
+    los prefiere cuando el audio se parece.
+    """
+    terms = []
+    name = (get_current_user_name() or "").strip()
+    if name:
+        terms.append(name)
+    terms.append("Emma")
+    for term in STT_HOTWORDS:
+        term = str(term or "").strip()
+        if term:
+            terms.append(term)
+
+    unique = []
+    seen = set()
+    for term in terms:
+        key = term.lower()
+        if key not in seen:
+            seen.add(key)
+            unique.append(term)
+    return ", ".join(unique)
+
+
+_NAME_SELF_RE = re.compile(
+    r"\b(my name is|me llamo|soy|i am|i'?m)\s+"
+    r"([A-Za-zÀ-ÿ][A-Za-zÀ-ÿ'\-]*)",
+    re.IGNORECASE,
+)
+
+# "this is X" solo se corrige si termina en "speaking": si no, podria ser
+# la presentacion de otra persona ("this is my friend").
+_NAME_INTRO_RE = re.compile(
+    r"\b(this is|it'?s|it is)\s+"
+    r"([A-Za-zÀ-ÿ][A-Za-zÀ-ÿ'\-]*)(\s+speaking\b)",
+    re.IGNORECASE,
+)
+
+
+def _name_skeleton(value: str) -> str:
+    """Consonantes del nombre: 'Henrius' y 'Henry' se parecen, 'Hendrix' no."""
+    folded = unicodedata.normalize("NFKD", str(value or "").lower())
+    folded = "".join(ch for ch in folded if not unicodedata.combining(ch))
+    folded = re.sub(r"[^a-z]", "", folded)
+    return folded.translate(str.maketrans("", "", "aeiou"))
+
+
+def _name_is_close(candidate: str, target: str) -> bool:
+    if not candidate or not target:
+        return False
+    if candidate[0].lower() != target[0].lower():
+        return False
+    left = _name_skeleton(candidate)
+    right = _name_skeleton(target)
+    if not left or not right:
+        return False
+    ratio = difflib.SequenceMatcher(None, left, right).ratio()
+    return ratio >= 0.7
+
+
+def correct_user_name_in_transcript(text: str) -> str:
+    """Corrige el nombre del usuario si el STT lo transcribe parecido.
+
+    Solo actua detras de formulas de presentacion ("my name is...", "I'm...",
+    "me llamo...", "this is ... speaking"), donde el nombre es seguro: asi no
+    se tocan palabras corrientes ni nombres de terceros.
+    """
+    name = (get_current_user_name() or "").strip()
+    if not text or not name:
+        return text
+
+    first = name.split()[0]
+    if len(first) < 4:
+        return text
+
+    def _candidate_base(candidate: str):
+        lowered = candidate.lower()
+        if lowered.endswith("'s") or lowered.endswith("\u2019s"):
+            return candidate[:-2], candidate[-2:]
+        return candidate, ""
+
+    def _replace_self(match):
+        prefix, candidate = match.group(1), match.group(2)
+        base, suffix = _candidate_base(candidate)
+        if base.lower() != first.lower() and _name_is_close(base, first):
+            return f"{prefix} {name}{suffix}"
+        return match.group(0)
+
+    def _replace_intro(match):
+        prefix, candidate, tail = match.group(1), match.group(2), match.group(3)
+        base, suffix = _candidate_base(candidate)
+        if base.lower() != first.lower() and _name_is_close(base, first):
+            return f"{prefix} {name}{suffix}{tail}"
+        return match.group(0)
+
+    text = _NAME_SELF_RE.sub(_replace_self, text)
+    return _NAME_INTRO_RE.sub(_replace_intro, text)
 
 # Nombre inicial
 _current_user_name = get_current_user_name()
@@ -6143,8 +6251,10 @@ def run_turn(turn_num: int, mic_stream, memoria):
             user_text, detected_lang, _forced = stt.transcribe(
                 full_audio, language=STT_LANGUAGE, beam_size=STT_BEAM_SIZE,
                 vad_filter=STT_VAD_FILTER,
+                hotwords=build_stt_hotwords(),
                 fallback_languages=STT_FALLBACK_LANGUAGES
             )
+            user_text = correct_user_name_in_transcript(user_text)
             stt_end = time.perf_counter()
             stt_ms = (stt_end - turn_start) * 1000
 
@@ -6593,9 +6703,14 @@ def main():
 
                             full_audio, language=STT_LANGUAGE, beam_size=STT_BEAM_SIZE,
 
-                            vad_filter=STT_VAD_FILTER, fallback_languages=STT_FALLBACK_LANGUAGES
+                            vad_filter=STT_VAD_FILTER,
+                            hotwords=build_stt_hotwords(),
+
+                            fallback_languages=STT_FALLBACK_LANGUAGES
 
                         )
+
+                        user_text = correct_user_name_in_transcript(user_text)
 
                         stt_ms = (time.perf_counter() - stt_start) * 1000
 

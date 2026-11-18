@@ -59,11 +59,12 @@ song_recognition:
   enabled: true              # reconocer musica grabada (Shazam) y silbidos/tarareos
   seconds: 9                 # segundos que graba tras el aviso de Emma
 stt:
-  model_size: medium
+  model_size: large-v3-turbo  # turbo rinde como large-v3 y es mas rapido que medium
   device: cuda
   compute_type: int8_float16
   language: null            # null = autodeteccion con correccion a es/en
   fallback_languages: [es, en]  # si Whisper detecta griego/otro, reintenta con estos
+  hotwords: [Emma]         # sesga el decodificador hacia nombres propios (el nombre del usuario se anade solo)
   beam_size: 1
   vad_filter: true
   min_silence_ms: 500
