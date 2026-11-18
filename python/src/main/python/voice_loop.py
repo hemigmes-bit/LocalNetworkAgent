@@ -2316,9 +2316,9 @@ def get_system_prompt_with_context(
 
         context += (
 
-            f"\n\nMEMORIA DEL USUARIO: el usuario se llama \"{get_current_user_name()}\". Llámalo siempre \"{get_current_user_name()}\" y nunca le pongas otro nombre. "
-
-
+            f"\n\nMEMORIA DEL USUARIO: el usuario se llama \"{get_current_user_name()}\". "
+            f"Llámalo siempre \"{get_current_user_name()}\" y nunca le pongas otro nombre. "
+            "No añadas apellidos ni nombres completos que no te haya dicho. "
 
             "Si dice que no es su nombre, discúlpate y pregúntale cómo se llama."
 
@@ -3598,13 +3598,16 @@ class LiveSpeech:
 
             # poder leerlo en pantalla mientras Emma habla (streaming sincronico).
 
-            self.emitted = True
+            # Primera frase del turno: tarjeta nueva. Las siguientes se añaden
+            # a esa misma tarjeta en lugar de abrir una tarjeta por frase.
 
-            if self.story_mode:
+            if self.emitted:
 
                 ui_emit("assistant_append", chunk)
 
             else:
+
+                self.emitted = True
 
                 ui_emit("assistant", chunk)
 
@@ -7643,6 +7646,9 @@ class ConversationWindow:
 
         self._message_cards = []  # (tarjeta, etiqueta de texto, tipo)
 
+        # Tarjeta de Emma del turno en curso: solo esta recibe texto añadido.
+        self._turn_emma_text = None
+
         self._next_row = 0
 
 
@@ -8348,104 +8354,62 @@ class ConversationWindow:
         
 
         # Guardar referencia a la tarjeta y al widget de texto para poder añadir texto después
-
         self._message_cards.append((card, body_text, kind))
 
-        
+        # Solo la tarjeta de Emma del turno actual acepta texto añadido.
+        if kind == "user":
+            self._turn_emma_text = None
+        elif kind == "emma":
+            self._turn_emma_text = body_text
 
         # Menú contextual: copiar
-
         def _copy_text(event=None):
-
             try:
-
                 body_text.configure(state="normal")
-
                 body_text.event_generate("<<Copy>>")
-
                 body_text.configure(state="disabled")
-
             except Exception:
-
                 pass
 
+        def _show_context_menu(event, widget):
+            menu = self.tk.Menu(widget, tearoff=0)
+            menu.add_command(label="Copiar", command=lambda: _copy_text())
+            try:
+                menu.tk_popup(event.x_root, event.y_root)
+            finally:
+                menu.grab_release()
+
+        body_text.bind("<Control-c>", _copy_text)
+        body_text.bind("<Command-c>", _copy_text)
         body_text.bind("<Button-3>", lambda e: _show_context_menu(e, body_text))
 
-        
-
         # Auto-scroll al final para que se vea el mensaje nuevo
-
-        self.root.after_idle(lambda: self.canvas.yview_moveto(1.0))
+        self.canvas.update_idletasks()
+        self.canvas.configure(scrollregion=self.canvas.bbox("all"))
+        self.canvas.yview_moveto(1.0)
 
 
 
     def append_to_last_emma(self, additional_text: str):
-
-        """Añade texto al último mensaje de Emma (para modo cuento streaming)."""
-
-        if not additional_text.strip():
-
+        """Añade texto a la respuesta actual de Emma (streaming por frases)."""
+        additional_text = (additional_text or "").strip()
+        if not additional_text:
             return
 
-        # Buscar la última tarjeta de Emma
-
-        for card, body_text, kind in reversed(self._message_cards):
-
-            if kind == "emma":
-
-                try:
-
-                    body_text.configure(state="normal")
-
-                    body_text.insert("end", " " + additional_text)
-
-                    body_text.configure(state="disabled")
-
-                    self._fit_text_height(body_text)
-
-                    # Auto-scroll al final
-
-                    self.canvas.yview_moveto(1.0)
-
-                except Exception:
-
-                    pass
-
-                return
-
-        # Si no hay mensaje previo de Emma, crear uno nuevo
-
-        self.append_message("EMMA", additional_text)
-
-        body_text.bind("<Control-c>", _copy_text)
-
-        body_text.bind("<Command-c>", _copy_text)
-
-        
-
-        def _show_context_menu(event, widget):
-
-            menu = tk.Menu(widget, tearoff=0)
-
-            menu.add_command(label="Copiar", command=lambda: _copy_text())
-
+        target = self._turn_emma_text
+        if target is not None:
             try:
+                target.configure(state="normal")
+                target.insert("end", " " + additional_text)
+                target.configure(state="disabled")
+                self._fit_text_height(target)
+                self.canvas.yview_moveto(1.0)
+                return
+            except Exception:
+                pass
 
-                menu.tk_popup(event.x_root, event.y_root)
-
-            finally:
-
-                menu.grab_release()
-
-        
-
-        self._message_cards.append((card, body_text, kind))
-
-        self.canvas.update_idletasks()
-
-        self.canvas.configure(scrollregion=self.canvas.bbox("all"))
-
-        self.canvas.yview_moveto(1.0)
+        # Sin tarjeta de Emma en este turno: crear una nueva.
+        self.append_message("EMMA", additional_text)
 
 
 
