@@ -7462,6 +7462,11 @@ def main():
 
     finally:
 
+        print(
+            "   [ENGINE] Fin del bucle "
+            f"(stop_loop={stop_loop}, stop_event={ENGINE_STOP_EVENT.is_set()})"
+        )
+
         mic_stream.stop()
 
         ENGINE_FINISHED_EVENT.set()
@@ -8615,6 +8620,8 @@ class ConversationWindow:
 
 
     def request_close(self):
+
+        print("[UI] Cierre solicitado por el usuario")
 
         if ENGINE_FINISHED_EVENT.is_set():
 
