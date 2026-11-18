@@ -2211,11 +2211,8 @@ def get_system_prompt_with_context(
 
 ) -> str:
 
-    # El prompt debe usar siempre el nombre guardado en SQLite, aunque otro
-
-    # proceso lo haya cambiado desde el ultimo turno.
-
-    refresh_user_name()
+    # El nombre se lee directo de SQLite en cada turno (get_current_user_name),
+    # asi que no hace falta sincronizar ninguna cache.
 
     if not SYSTEM_PROMPT:
 
@@ -4570,8 +4567,6 @@ def handle_profile_request(
 ):
 
     """Contesta '¿cómo me llamo?' desde el perfil, sin LLM."""
-
-    refresh_user_name()
 
     reply = answer_profile_question(
 
