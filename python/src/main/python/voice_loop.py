@@ -597,6 +597,9 @@ WAKE_WORD_ENABLED = bool(AUDIO_CONFIG.get("wake_word", True))
 
 WAKE_FOLLOWUP_MS = int(AUDIO_CONFIG.get("wake_followup_ms", 20000))
 
+# Si el micro deja de entregar bloques durante este tiempo, se reabre el stream.
+MIC_WATCHDOG_S = float(AUDIO_CONFIG.get("mic_watchdog_s", 6.0))
+
 _WAKE_RE = re.compile(r"\b(emma|ema)\b", re.IGNORECASE)
 
 
@@ -745,6 +748,9 @@ class MicStream:
 
         self._lock = threading.Lock()
 
+        # Marca de tiempo del ultimo bloque recibido (watchdog de micro).
+        self._last_frame_ts = time.time()
+
     
 
     def _callback(self, indata, frames, time_info, status):
@@ -758,6 +764,8 @@ class MicStream:
             with self._lock:
 
                 self._queue.append(indata.copy())
+
+                self._last_frame_ts = time.time()
 
     
 
@@ -788,6 +796,8 @@ class MicStream:
         self._stream.start()
 
         self._running = True
+
+        self._last_frame_ts = time.time()
 
         print("   [MicStream] Iniciado")
 
@@ -826,6 +836,42 @@ class MicStream:
             time.sleep(0.001)
 
         return None
+
+    
+
+    def seconds_since_last_frame(self) -> float:
+
+        """Segundos desde el ultimo bloque entregado por el dispositivo."""
+
+        return max(0.0, time.time() - self._last_frame_ts)
+
+    
+
+    def restart(self) -> bool:
+
+        """Reabre el stream cuando el dispositivo deja de entregar audio."""
+
+        self._last_frame_ts = time.time()
+
+        try:
+
+            self.stop()
+
+        except Exception as stop_error:
+
+            print(f"   [MicStream] Error al cerrar: {stop_error}")
+
+        try:
+
+            self.start()
+
+            return True
+
+        except Exception as start_error:
+
+            print(f"   [MicStream] No se pudo reabrir: {start_error}")
+
+            return False
 
     
 
@@ -6339,6 +6385,21 @@ def main():
 
             frame = mic_stream.read(timeout=0.1)
 
+            # Watchdog: si el dispositivo deja de entregar bloques (driver
+            # colgado, dispositivo perdido), reabrir el stream en caliente.
+            if mic_stream.seconds_since_last_frame() > MIC_WATCHDOG_S:
+
+                print(
+                    "   [MicStream] Sin audio del dispositivo; "
+                    f"reabriendo (>{MIC_WATCHDOG_S:.0f}s)..."
+                )
+
+                if mic_stream.restart():
+
+                    vad_iter.reset_states()
+
+                continue
+
             if frame is None:
 
                 continue
@@ -6511,6 +6572,8 @@ def main():
 
                             vad_iter.reset_states()
 
+                            ui_emit("status", "Escuchando…")
+
                             continue
 
 
@@ -6541,6 +6604,8 @@ def main():
 
                             vad_iter.reset_states()
 
+                            ui_emit("status", "Escuchando…")
+
                             continue
 
 
@@ -6564,6 +6629,10 @@ def main():
                             )
 
                             vad_iter.reset_states()
+
+                            # La GUI no debe quedarse en "Procesando tu voz…":
+                            # el turno se descarto, seguimos escuchando.
+                            ui_emit("status", "Escuchando… (di «Emma» para hablar)")
 
                             continue
 
