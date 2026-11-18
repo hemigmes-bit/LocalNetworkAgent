@@ -61,7 +61,7 @@ song_recognition:
 stt:
   model_size: medium
   device: cuda
-  compute_type: float16
+  compute_type: int8_float16
   language: null            # null = autodeteccion con correccion a es/en
   fallback_languages: [es, en]  # si Whisper detecta griego/otro, reintenta con estos
   beam_size: 1
