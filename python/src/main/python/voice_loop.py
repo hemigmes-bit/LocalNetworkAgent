@@ -6523,6 +6523,14 @@ def main():
 
             
 
+            # Pausar conversación: el usuario pide silencio. Descartamos el frame
+            # actual (no lo procesamos) y esperamos a que se reanude.
+            if conversation_window.paused:
+
+                time.sleep(0.05)
+
+                continue
+
             # Si Emma está hablando, vigilar barge-in
 
             if current_speech and current_speech.stream.playback_started.is_set():
@@ -7764,6 +7772,8 @@ class ConversationWindow:
         # Tarjeta de Emma del turno en curso: solo esta recibe texto añadido.
         self._turn_emma_text = None
 
+        self.paused = False  # True mientras el usuario detiene el micro (boton Pausar)
+
         self._next_row = 0
 
 
@@ -8013,6 +8023,14 @@ class ConversationWindow:
         )
 
         self.close_button.pack(side="right", padx=22, pady=8)
+
+        self.pause_button = tk.Button(
+            footer, text="Pausar conversación", command=self.toggle_pause,
+            bg="#eef2f7", fg="#18324b", activebackground="#dfe6f1",
+            activeforeground="#18324b", relief="flat", borderwidth=0,
+            padx=17, pady=8, font=("Segoe UI", 9, "bold"), cursor="hand2"
+        )
+        self.pause_button.pack(side="left", padx=(22, 8), pady=8)
 
 
 
@@ -8723,6 +8741,32 @@ class ConversationWindow:
             stop_loop = True
 
             ENGINE_STOP_EVENT.set()
+
+
+
+    def toggle_pause(self):
+
+        """Pausa o reanuda la escucha del micrófono (no cierra Emma)."""
+
+        self.paused = not self.paused
+
+        if self.paused:
+
+            self.pause_button.configure(text="Reanudar conversación", bg="#fdecec", fg="#8a3a3a")
+
+            self.status_var.set("Conversación pausada. El micrófono no escucha.")
+
+            self.header_status.configure(text="●  PAUSADA", fg="#8a3a3a", bg="#fff4d9")
+
+        else:
+
+            self.pause_button.configure(text="Pausar conversación", bg="#eef2f7", fg="#18324b")
+
+            self.status_var.set("Conversación reanudada. Habla cuando quieras.")
+
+            self.header_status.configure(text="●  ESCUCHANDO", fg="#1769aa", bg="#d6f0f8")
+
+            self.text_entry.focus_set()
 
 
 
