@@ -710,6 +710,51 @@ MIC_WATCHDOG_S = float(AUDIO_CONFIG.get("mic_watchdog_s", 6.0))
 
 _WAKE_RE = re.compile(r"\b(emma|ema)\b", re.IGNORECASE)
 
+# Whisper confunde a menudo el nombre con una palabra parecida. Se aceptan
+# variantes conocidas y cualquier palabra a una edicion de "emma"/"ema".
+_WAKE_NAMES = ("emma", "ema")
+
+_WAKE_EXTRA = frozenset({
+    "enma", "emna", "ehma", "emmma", "hemma", "emmas", "amma", "eamma",
+    "emm", "eemma", "emme", "emmi", "emy", "emmy", "emmax",
+})
+
+
+def _edit_distance_le_one(left: str, right: str) -> bool:
+    """True si ``left`` y ``right`` difieren en como mucho una edicion."""
+
+    if left == right:
+        return True
+    if abs(len(left) - len(right)) > 1:
+        return False
+    if len(left) > len(right):
+        left, right = right, left
+    i = j = 0
+    edits = 0
+    while i < len(left) and j < len(right):
+        if left[i] == right[j]:
+            i += 1
+            j += 1
+            continue
+        edits += 1
+        if edits > 1:
+            return False
+        if len(left) == len(right):
+            i += 1
+        j += 1
+    return True
+
+
+def _is_wake_variant(word: str) -> bool:
+    token = str(word or "").strip().lower()
+    if not token:
+        return False
+    if token in _WAKE_EXTRA:
+        return True
+    if not 2 <= len(token) <= 6:
+        return False
+    return any(_edit_distance_le_one(token, name) for name in _WAKE_NAMES)
+
 
 
 
@@ -718,7 +763,18 @@ def mentions_wake_word(text: str) -> bool:
 
     """True si el texto contiene el nombre de Emma como palabra suelta."""
 
-    return bool(_WAKE_RE.search(str(text or "")))
+    raw = str(text or "")
+    if _WAKE_RE.search(raw):
+        return True
+
+    # El nombre suele ir al principio ("Emma, ..."), asi que basta con mirar
+    # las tres primeras palabras para no aceptar ruido del resto de la frase.
+    words = re.findall(r"[^\W\d_]+", raw.lower(), flags=re.UNICODE)
+    for word in words[:3]:
+        if _is_wake_variant(word):
+            print(f"   [WAKE] Variante aceptada: '{word}'")
+            return True
+    return False
 
 
 
@@ -4561,6 +4617,13 @@ def build_voice_reply(
 
             return "Okay, I'll speak a little faster. Is this better?"
 
+        if action == "cycle_female":
+
+            return (
+                f"Okay, I've switched to my {label} voice. "
+                "This is the next female voice. Do you like it?"
+            )
+
         return (
 
             f"Okay, I've changed my voice. This is my {label} voice now. "
@@ -4592,6 +4655,13 @@ def build_voice_reply(
     if action == "fast":
 
         return "Vale, voy a hablar un poco más rápido. ¿Así está mejor?"
+
+    if action == "cycle_female":
+
+        return (
+            f"Vale, he cambiado a mi voz {label}. "
+            "Esta es la siguiente voz femenina. ¿Te gusta?"
+        )
 
     return (
 
@@ -4690,6 +4760,8 @@ def _apply_voice_request(request: Dict[str, Any], user_language: str):
 
     if action == "next":
         new = emma_state.cycle_voice_profile(1, language=user_language)
+    elif action == "cycle_female":
+        new = emma_state.cycle_female_voice_profile(1, language=user_language)
     elif action == "set":
         new = emma_state.set_voice_profile(request.get("profile", ""))
     elif action == "natural":
@@ -4823,15 +4895,15 @@ def handle_voice_request(
 
     action = request.get("action", "")
 
-    # "Me gusta tu voz" no cambia nada; la velocidad es un ajuste inmediato
-    # porque el usuario la pide explicitamente en la misma frase.
-    if action in ("like", "slow", "fast"):
+    # "Me gusta tu voz" no cambia nada; la velocidad y el ciclo femenino son ajustes inmediatos
+    # porque el usuario los pide explicitamente en la misma frase.
+    if action in ("like", "slow", "fast", "cycle_female"):
         try:
             new, already_natural = _apply_voice_request(request, user_language)
         except Exception as voice_error:
             print(f"   [VOZ] Error aplicando el cambio: {voice_error}")
             return None
-        if action in ("slow", "fast"):
+        if action in ("slow", "fast", "cycle_female"):
             apply_voice_prefs(new)
         spoken = build_voice_reply(action, new, language, already_natural)
         return _speak_voice_turn(
@@ -6467,9 +6539,17 @@ def main():
 
     print(f"Modo: full-duplex continuo, barge-in activo")
 
+    if WAKE_WORD_ENABLED:
+
+        print(f"Palabra clave: 'Emma' (seguimiento {WAKE_FOLLOWUP_MS // 1000}s)")
+
+    else:
+
+        print("Palabra clave: desactivada (responde a todo)")
+
     print("="*60)
 
-    print("Habla cuando quieras. Emma escucha siempre.")
+    print("Di «Emma» para empezar. Después no hace falta repetirlo.")
 
     print("Presiona Ctrl+C para parar.")
 
@@ -6836,9 +6916,7 @@ def main():
 
                             vad_iter.reset_states()
 
-                            ui_emit("status", "Escuchando…")
-
-                            continue
+                            ui_emit("status", listening_status(wake_until))
 
 
 
@@ -6873,9 +6951,7 @@ def main():
 
                             vad_iter.reset_states()
 
-                            ui_emit("status", "Escuchando…")
-
-                            continue
+                            ui_emit("status", listening_status(wake_until))
 
 
 

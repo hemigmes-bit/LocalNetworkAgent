@@ -44,6 +44,14 @@ class FakeState:
         self.prefs["profile"] = "soft"
         return dict(self.prefs)
 
+    def cycle_female_voice_profile(self, step=1, language=None):
+        order = ("warm", "soft", "bright", "british")
+        current = self.prefs["profile"] if self.prefs["profile"] in order else order[0]
+        index = order.index(current)
+        new_profile = order[(index + step) % len(order)]
+        self.prefs["profile"] = new_profile
+        return dict(self.prefs)
+
     def set_voice_profile(self, profile):
         self.prefs["profile"] = profile
         return dict(self.prefs)
@@ -189,6 +197,28 @@ class TestVoicePermission(unittest.TestCase):
         self.assertFalse(self.confirm("claro que no"))
         self.assertFalse(self.confirm("no se"))
         self.assertIsNone(self.confirm("que hora es"))
+
+    def test_cycle_female_is_immediate_and_cycles(self):
+        # cycle_female should apply immediately without asking permission
+        self.state.prefs["profile"] = "warm"
+        result = self.handle("cambia entre voces femeninas", 0.0, "en", "en")
+        self.assertIsNotNone(result)
+        self.assertEqual(self.state.prefs["profile"], "soft")
+
+        # Second cycle
+        result = self.handle("siguiente voz femenina", 0.0, "en", "en")
+        self.assertEqual(self.state.prefs["profile"], "bright")
+
+        # Third cycle
+        result = self.handle("female voices only", 0.0, "en", "en")
+        self.assertEqual(self.state.prefs["profile"], "british")
+
+        # Fourth cycle wraps to warm
+        result = self.handle("cambia entre voces femeninas", 0.0, "en", "en")
+        self.assertEqual(self.state.prefs["profile"], "warm")
+
+        # Should not leave a pending request
+        self.assertIsNone(self.ns["_PENDING_VOICE_REQUEST"])
 
 
 if __name__ == "__main__":

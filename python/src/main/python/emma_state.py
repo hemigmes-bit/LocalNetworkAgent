@@ -447,6 +447,9 @@ VOICE_PROFILE_INDEX = {profile["id"]: profile for profile in VOICE_PROFILES}
 # que el ciclo en español salta los perfiles que comparten la misma voz.
 _VOICE_CYCLE_ES = ("warm", "male", "male_deep")
 
+# Ciclo solo de voces femeninas (en ingles son distintas; en espanol suenan igual).
+_VOICE_CYCLE_FEMALE = ("warm", "soft", "bright", "british")
+
 # Frases que piden cambiar de voz. Se comparan sin tildes y en minusculas.
 _VOICE_DISLIKE = (
     "no me gusta tu voz", "no me gusta esta voz", "no me gusta la voz",
@@ -513,6 +516,7 @@ _VOICE_FASTER = (
 )
 _VOICE_SPECIFIC = (
     ("male_deep", ("voz grave", "voz mas grave", "voz más grave", "deep voice", "deeper voice")),
+    ("warm", ("voz de mujer", "voz femenina", "female voice", "woman's voice", "feminine voice")),
     ("male", (
         "voz de hombre", "voz masculina", "voz de chico", "male voice",
         "man's voice", "masculine voice",
@@ -529,7 +533,6 @@ _VOICE_SPECIFIC = (
     ("warm", (
         "voz calida", "voz cálida", "voz cercana", "warm voice", "warmer voice",
     )),
-    ("warm", ("voz de mujer", "voz femenina", "female voice", "woman's voice", "feminine voice")),
 )
 
 
@@ -584,6 +587,20 @@ def cycle_voice_profile(step: int = 1, language: Optional[str] = None) -> Dict[s
     return set_voice_profile(new_profile)
 
 
+def cycle_female_voice_profile(step: int = 1, language: Optional[str] = None) -> Dict[str, Any]:
+    """Pasa a la siguiente voz femenina.
+    
+    En inglés recorre: warm -> soft -> bright -> british.
+    En español todas usan ef_dora, así que avisa pero no cambia el sonido.
+    """
+    prefs = load_prefs()
+    order = _VOICE_CYCLE_FEMALE
+    current = prefs["voice_profile"] if prefs["voice_profile"] in order else order[0]
+    index = order.index(current)
+    new_profile = order[(index + step) % len(order)]
+    return set_voice_profile(new_profile)
+
+
 def set_voice_speed(speed: float) -> Dict[str, Any]:
     prefs = load_prefs()
     try:
@@ -609,11 +626,19 @@ def voice_profile_label(profile_id: Optional[str], language: str = "es") -> str:
     return profile.get(key, profile["label_es"])
 
 
+# 5b) Ciclo solo de voces femeninas (antes que perfiles concretos para
+# evitar que "female voices only" coincida con "female voice" de warm).
+_VOICE_FEMALE_CYCLE = (
+    "cambia entre voces femeninas", "solo voces femeninas", "voces femeninas",
+    "female voices only", "cycle female voices", "only female voices",
+    "cambia de voz femenina", "siguiente voz femenina",
+)
+
 def detect_voice_request(text: str) -> Optional[Dict[str, str]]:
     """Detecta peticiones sobre la voz de Emma.
 
     Devuelve ``{"action": ...}`` o ``None``. Las acciones son ``next``,
-    ``like``, ``natural``, ``reset``, ``slow``, ``fast`` y ``set`` (con
+    ``like``, ``natural``, ``reset``, ``slow``, ``fast``, ``cycle_female`` y ``set`` (con
     ``profile``). Es conservador para no cambiar la voz por frases sueltas.
     """
     if not text or not text.strip():
@@ -627,6 +652,10 @@ def detect_voice_request(text: str) -> Optional[Dict[str, str]]:
     # 1) Negativas: "no me gusta tu voz" tambien contiene "me gusta tu voz".
     if any(phrase in norm for phrase in _VOICE_DISLIKE):
         return {"action": "next"}
+
+    # 1b) Ciclo solo de voces femeninas (antes que perfiles concretos).
+    if any(phrase in norm for phrase in _VOICE_FEMALE_CYCLE):
+        return {"action": "cycle_female"}
 
     # 2) Perfiles concretos ("voz de hombre", "acento britanico").
     for profile_id, phrases in _VOICE_SPECIFIC:
