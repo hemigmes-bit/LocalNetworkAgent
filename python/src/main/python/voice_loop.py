@@ -4605,173 +4605,248 @@ def build_voice_reply(
 
 
 
-def handle_voice_request(
+_VOICE_CONFIRM_TTL_S = 60.0
 
-    user_text: str,
+# Ningun cambio de identidad de voz se aplica sin un "si" explicito.
+_PENDING_VOICE_REQUEST: Optional[Dict[str, Any]] = None
 
-    stt_ms: float,
+_VOICE_YES = (
+    "si", "claro", "vale", "ok", "okay", "yes", "yeah", "yep",
+    "adelante", "hazlo", "cambiala", "confirmo", "de acuerdo", "perfecto",
+    "si por favor", "yes please", "go ahead", "do it", "of course",
+    "por supuesto", "desde luego", "dale", "venga",
+)
 
-    user_language: str,
+_VOICE_NO = (
+    "no", "no gracias", "no por favor", "mejor no", "dejalo",
+    "cancelar", "cancela", "no cambies", "no quiero", "no la cambies",
+    "no thanks", "never mind", "forget it", "keep it", "keep your voice",
+)
 
-    active_language: str,
 
-    turn_num: int = 0,
+def _norm_voice_phrase(value: str) -> str:
+    folded = unicodedata.normalize("NFKD", str(value or "").lower())
+    folded = "".join(ch for ch in folded if not unicodedata.combining(ch))
+    return re.sub(r"[^a-z0-9 ]+", " ", folded).strip()
 
-    turn_start: Optional[float] = None,
 
-):
-
-    """Cambia la voz si el usuario lo pide, sin pasar por el LLM."""
-
-    if not EMMA_STATE_AVAILABLE:
-
+def _voice_confirmation(text: str) -> Optional[bool]:
+    """True si confirma, False si rechaza, None si no queda claro."""
+    norm = _norm_voice_phrase(text)
+    if not norm:
         return None
 
-    try:
+    # El rechazo se mira primero: "no, gracias" no debe colarse y
+    # "claro que no" tampoco es un si.
+    for phrase in _VOICE_NO:
+        key = _norm_voice_phrase(phrase)
+        if norm == key or norm.startswith(key + " "):
+            return False
+    if re.search(
+        r"\b(claro|por supuesto|desde luego|of course)\s+(que\s+)?no\b", norm
+    ):
+        return False
 
-        request = emma_state.detect_voice_request(user_text)
-
-    except Exception as voice_error:
-
-        print(f"   [VOZ] Error detectando la peticion: {voice_error}")
-
-        return None
-
-    if not request:
-
-        return None
+    for phrase in _VOICE_YES:
+        key = _norm_voice_phrase(phrase)
+        if norm == key or norm.startswith(key + " "):
+            return True
+    return None
 
 
-
-    language = LANGUAGE_PREFERENCE or active_language or user_language or "es"
-
+def _build_voice_permission_question(
+    request: Dict[str, Any], language: str
+) -> str:
+    """Pregunta antes de cambiar la voz; nunca la cambia por su cuenta."""
     action = request.get("action", "")
+    if language == "en":
+        if action == "set":
+            label = emma_state.voice_profile_label(request.get("profile"), "en")
+            return (
+                f"I can switch to my {label} voice, but I need your explicit "
+                "permission first. Say yes to change it, or no to keep it as it is."
+            )
+        return (
+            "I can change my voice, but I need your explicit permission first. "
+            "Say yes to change it, or no to keep it as it is."
+        )
 
+    if action == "set":
+        label = emma_state.voice_profile_label(request.get("profile"), "es")
+        return (
+            f"Puedo cambiar a mi voz {label}, pero antes necesito tu permiso expreso. "
+            "Di «sí» para cambiarla o «no» para dejarla como está."
+        )
+    return (
+        "Puedo cambiar mi voz, pero antes necesito tu permiso expreso. "
+        "Di «sí» para cambiarla o «no» para dejarla como está."
+    )
+
+
+def _apply_voice_request(request: Dict[str, Any], user_language: str):
+    """Aplica una peticion ya autorizada y devuelve (prefs, already_natural)."""
+    action = request.get("action", "")
     old = emma_state.get_voice_prefs()
 
+    if action == "next":
+        new = emma_state.cycle_voice_profile(1, language=user_language)
+    elif action == "set":
+        new = emma_state.set_voice_profile(request.get("profile", ""))
+    elif action == "natural":
+        new = emma_state.set_voice_profile("warm")
+    elif action == "reset":
+        new = emma_state.reset_voice_prefs()
+    elif action == "slow":
+        new = emma_state.set_voice_speed(float(old.get("speed", 0.95)) - 0.05)
+    elif action == "fast":
+        new = emma_state.set_voice_speed(float(old.get("speed", 0.95)) + 0.05)
+    else:
+        new = old
+
     already_natural = action == "natural" and old.get("profile") == "warm"
+    return new, already_natural
 
 
-
-    try:
-
-        if action == "next":
-
-            new = emma_state.cycle_voice_profile(1, language=user_language)
-
-        elif action == "set":
-
-            new = emma_state.set_voice_profile(request.get("profile", ""))
-
-        elif action == "natural":
-
-            new = emma_state.set_voice_profile("warm")
-
-        elif action == "reset":
-
-            new = emma_state.reset_voice_prefs()
-
-        elif action == "slow":
-
-            new = emma_state.set_voice_speed(float(old.get("speed", 0.95)) - 0.05)
-
-        elif action == "fast":
-
-            new = emma_state.set_voice_speed(float(old.get("speed", 0.95)) + 0.05)
-
-        elif action == "like":
-
-            new = old
-
-        else:
-
-            return None
-
-    except Exception as voice_error:
-
-        print(f"   [VOZ] Error aplicando el cambio: {voice_error}")
-
-        return None
-
-
-
-    apply_voice_prefs(new)
-
-    spoken = build_voice_reply(action, new, language, already_natural)
-
-    print(f"   [VOZ] Peticion '{action}' -> '{spoken[:70]}...' ({language})")
-
-
-
+def _speak_voice_turn(
+    spoken: str,
+    user_text: str,
+    stt_ms: float,
+    language: str,
+    user_language: str,
+    turn_num: int = 0,
+    turn_start: Optional[float] = None,
+):
+    """Dice la respuesta de voz y registra el turno."""
+    print(f"   [VOZ] -> '{spoken[:70]}...' ({language})")
     ui_emit("assistant", spoken)
-
     ui_emit("status", "Emma está hablando…")
 
     try:
-
         tts_first_ms, _tts_ms = speak_text(spoken, language)
-
     except Exception as tts_error:
-
         print(f"   [VOZ] Error hablando la confirmacion: {tts_error}")
-
         return None
 
-
+    ui_emit("status", "Te escucho.")
 
     if not FULL_DUPLEX:
-
         time.sleep(POST_TTS_DELAY_MS / 1000.0)
 
-
-
     if turn_start is None:
-
         turn_start = time.perf_counter()
-
     if not turn_num:
-
         turn_num = len(turn_results) + 1
-
     total_ms = (time.perf_counter() - turn_start) * 1000
 
     result = TurnResult(
-
         turn=turn_num,
-
         stt_ms=stt_ms,
-
         llm_first_token_ms=0.0,
-
         llm_full_ms=0.0,
-
         tts_first_ms=tts_first_ms,
-
         total_ms=total_ms,
-
         user_text=user_text,
-
         assistant_spoken=spoken,
-
         assistant_language=language,
-
         corrections=[],
-
         vocabulary=[],
-
         user_language=user_language,
-
         learning={},
-
     )
-
     add_turn_to_history(user_text, spoken, language)
-
     turn_results.append(result)
-
     return result
 
 
+def handle_voice_request(
+    user_text: str,
+    stt_ms: float,
+    user_language: str,
+    active_language: str,
+    turn_num: int = 0,
+    turn_start: Optional[float] = None,
+):
+    """Cambia la voz solo si el usuario lo pide y lo confirma.
+
+    La deteccion de frases no aplica nada por si sola: propone el cambio y
+    espera un si/no en el turno siguiente (caduca a los 60 s). Sin un "si"
+    explicito, la voz se queda exactamente como estaba.
+    """
+    global _PENDING_VOICE_REQUEST
+
+    if not EMMA_STATE_AVAILABLE:
+        return None
+
+    language = active_language or user_language or LANGUAGE_PREFERENCE or "es"
+
+    pending = _PENDING_VOICE_REQUEST
+    if pending:
+        _PENDING_VOICE_REQUEST = None
+        if time.time() - pending["created"] <= _VOICE_CONFIRM_TTL_S:
+            answer = _voice_confirmation(user_text)
+            if answer is True:
+                try:
+                    new, already_natural = _apply_voice_request(
+                        pending["request"], user_language
+                    )
+                except Exception as voice_error:
+                    print(f"   [VOZ] Error aplicando el cambio: {voice_error}")
+                    return None
+                apply_voice_prefs(new)
+                spoken = build_voice_reply(
+                    pending["request"].get("action", ""), new, language,
+                    already_natural,
+                )
+                return _speak_voice_turn(
+                    spoken, user_text, stt_ms, language, user_language,
+                    turn_num, turn_start,
+                )
+            if answer is False:
+                spoken = (
+                    "Okay, I'll keep my voice as it is."
+                    if language == "en"
+                    else "De acuerdo, mantengo mi voz tal como está."
+                )
+                return _speak_voice_turn(
+                    spoken, user_text, stt_ms, language, user_language,
+                    turn_num, turn_start,
+                )
+
+    try:
+        request = emma_state.detect_voice_request(user_text)
+    except Exception as voice_error:
+        print(f"   [VOZ] Error detectando la peticion: {voice_error}")
+        return None
+
+    if not request:
+        return None
+
+    action = request.get("action", "")
+
+    # "Me gusta tu voz" no cambia nada; la velocidad es un ajuste inmediato
+    # porque el usuario la pide explicitamente en la misma frase.
+    if action in ("like", "slow", "fast"):
+        try:
+            new, already_natural = _apply_voice_request(request, user_language)
+        except Exception as voice_error:
+            print(f"   [VOZ] Error aplicando el cambio: {voice_error}")
+            return None
+        if action in ("slow", "fast"):
+            apply_voice_prefs(new)
+        spoken = build_voice_reply(action, new, language, already_natural)
+        return _speak_voice_turn(
+            spoken, user_text, stt_ms, language, user_language,
+            turn_num, turn_start,
+        )
+
+    # Cambio de identidad de voz: proponer y esperar permiso expreso.
+    _PENDING_VOICE_REQUEST = {"request": request, "created": time.time()}
+    spoken = _build_voice_permission_question(request, language)
+    print(f"   [VOZ] Peticion '{action}' pendiente de permiso")
+    return _speak_voice_turn(
+        spoken, user_text, stt_ms, language, user_language,
+        turn_num, turn_start,
+    )
 
 
 

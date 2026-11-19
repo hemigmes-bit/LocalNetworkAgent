@@ -455,6 +455,19 @@ _VOICE_DISLIKE = (
     "i do not like your voice", "i do not like this voice",
     "not this voice", "no me convence la voz",
 )
+# Prohibiciones: "no quiero que cambies de voz" contiene "cambies de voz";
+# se comprueban antes que cualquier peticion de cambio.
+_VOICE_KEEP = (
+    "no cambies de voz", "no cambies tu voz", "no cambies la voz",
+    "no quiero que cambies de voz", "no quiero que cambies tu voz",
+    "no quiero que cambies la voz", "no quiero cambiar de voz",
+    "no quiero otra voz", "no quiero que cambies", "deja tu voz",
+    "deja la voz como esta", "manten tu voz", "manten la voz",
+    "don't change your voice", "do not change your voice",
+    "don't change the voice", "i don't want you to change your voice",
+    "i don't want to change your voice", "keep your voice",
+    "keep the voice", "leave your voice alone",
+)
 _VOICE_NEXT = (
     "otra voz", "voz diferente", "cambia tu voz", "cambia de voz",
     "cambiar tu voz", "cambiar de voz", "cambiate la voz",
@@ -606,6 +619,10 @@ def detect_voice_request(text: str) -> Optional[Dict[str, str]]:
     if not text or not text.strip():
         return None
     norm = _norm(text)
+
+    # 0) Prohibiciones ("no quiero que cambies de voz"): no es una peticion.
+    if any(phrase in norm for phrase in _VOICE_KEEP):
+        return None
 
     # 1) Negativas: "no me gusta tu voz" tambien contiene "me gusta tu voz".
     if any(phrase in norm for phrase in _VOICE_DISLIKE):
