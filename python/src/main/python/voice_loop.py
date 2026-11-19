@@ -2267,11 +2267,27 @@ def build_language_block(preference: Optional[str], detected_lang: str = "") -> 
 
     """
 
-    target = preference if LANGUAGE_MODE == "lock" else (detected_lang or preference)
+    # ``preference`` es el idioma resuelto del turno (peticion explicita incluida);
+    # ``detected_lang`` es el idioma real que ha hablado el usuario. Si difieren,
+    # se debe a una peticion explicita y el prompt no debe afirmar lo contrario.
+    target = preference if LANGUAGE_MODE == "lock" else (preference or detected_lang)
 
     if target == "en":
 
         if LANGUAGE_MODE != "lock":
+
+            if detected_lang in ("en", "es") and detected_lang != "en":
+
+                return (
+
+                    "IDIOMA DE ESTE TURNO: INGLÉS (petición explícita).\n"
+
+                    "El usuario te ha pedido hablar en inglés aunque su último "
+                    "mensaje esté en español. Responde en inglés y no cambies de "
+                    "idioma a mitad de la respuesta. El campo \"language\" debe "
+                    "ser \"en\"."
+
+                )
 
             return (
 
@@ -2307,6 +2323,19 @@ def build_language_block(preference: Optional[str], detected_lang: str = "") -> 
 
         if LANGUAGE_MODE != "lock":
 
+            if detected_lang in ("en", "es") and detected_lang != "es":
+
+                return (
+
+                    "IDIOMA DE ESTE TURNO: ESPAÑOL (petición explícita).\n"
+
+                    "El usuario te ha pedido hablar en español aunque su último "
+                    "mensaje esté en inglés. Responde en español y no cambies de "
+                    "idioma a mitad de la respuesta. El campo \"language\" debe "
+                    "ser \"es\"."
+
+                )
+
             return (
 
                 "IDIOMA DE ESTE TURNO: ESPAÑOL.\n"
@@ -2335,11 +2364,11 @@ def build_language_block(preference: Optional[str], detected_lang: str = "") -> 
 
         )
 
-    lang = "inglés" if detected_lang == "en" else "español"
+    lang = "inglés" if target == "en" else "español"
 
     return (
 
-        f"IDIOMA: responde en {lang}, el idioma del usuario en este turno. "
+        f"IDIOMA: responde en {lang}, el idioma de este turno. "
 
         "No cambies de idioma a mitad de la respuesta."
 
@@ -2774,7 +2803,7 @@ def build_continuation_payload(
 
 
 
-    language_block = build_language_block(LANGUAGE_PREFERENCE, language)
+    language_block = build_language_block(language or LANGUAGE_PREFERENCE, language)
 
     system_prompt = (
 
@@ -3254,6 +3283,36 @@ class StreamingTTS:
 
 
 
+    @staticmethod
+    def match_text_language(text: str, language: str) -> str:
+
+        """Ajusta la voz al idioma real de la frase.
+
+        El modelo puede contestar en el idioma contrario al resuelto para el
+        turno; leer ese texto con la voz equivocada suena roto. Solo se corrige
+        cuando la frase es larga y las senales del otro idioma son claras.
+        """
+
+        if language not in ("en", "es"):
+
+            return language
+
+        if len(str(text or "").split()) < 5:
+
+            return language
+
+        en, es = _language_scores(text)
+
+        if language == "es" and en - es >= 3:
+
+            return "en"
+
+        if language == "en" and es - en >= 3:
+
+            return "es"
+
+        return language
+
     def add_text(self, text: str, language: str):
 
         """Añade texto a la cola para síntesis y reproducción."""
@@ -3262,7 +3321,16 @@ class StreamingTTS:
 
             return
 
-        self.queue.put((text, language))
+        fitted = self.match_text_language(text, language)
+
+        if fitted != language:
+
+            print(
+                f"   [TTS] Frase en {fitted}: corrijo la voz del turno "
+                f"({language} -> {fitted})"
+            )
+
+        self.queue.put((text, fitted))
 
 
 
@@ -5173,7 +5241,7 @@ def process_turn(
 
 
 
-    if LANGUAGE_PREFERENCE:
+    if LANGUAGE_PREFERENCE and LANGUAGE_MODE == "lock":
 
         print(f"   [IDIOMA] Respuesta forzada en: {LANGUAGE_PREFERENCE}")
 
@@ -5533,7 +5601,7 @@ def process_turn(
 
         user_text,
 
-        active_language,
+        detected_lang or active_language,
 
         story=story_mode,
 
@@ -7146,7 +7214,7 @@ def main():
 
                     system_prompt = get_system_prompt_with_context(
 
-                        user_text, active_language, story=story_mode,
+                        user_text, detected_lang or active_language, story=story_mode,
 
                         story_material=story_material, memories=memories,
 

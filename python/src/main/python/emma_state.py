@@ -98,6 +98,10 @@ _EN_PHRASES = (
     "contestame en ingles", "quiero hablar en ingles",
     "quiero practicar ingles", "practiquemos ingles", "practicar ingles",
     "di todo en ingles", "a partir de ahora en ingles",
+    "back to english", "return to english", "switch back to english",
+    "english voice", "your english voice", "speak english again",
+    "english again", "en ingles otra vez", "voz en ingles", "voz inglesa",
+    "tu voz en ingles",
 )
 _ES_PHRASES = (
     "speak spanish", "speak in spanish", "talk in spanish", "in spanish please",
@@ -112,17 +116,24 @@ _ES_PHRASES = (
     "no me hables en ingles", "sin ingles", "cambia a espanol",
     "responde en espanol", "contestame en espanol", "quiero hablar en espanol",
     "di todo en espanol", "a partir de ahora en espanol",
+    "back to spanish", "return to spanish", "switch back to spanish",
+    "spanish voice", "your spanish voice", "speak spanish again",
+    "spanish again", "en espanol otra vez", "voz en espanol", "voz espanola",
+    "tu voz en espanol",
 )
 
 # "no quiero oir ni una palabra en espanol" / "I don't want any Spanish".
+# La negacion debe preceder al idioma y quedar cerca (max. 6 palabras): asi
+# "why don't you just get back to your first voice? English voice" no se
+# confunde con una peticion de espanol.
 _NEG_SPANISH_RE = re.compile(
-    r"\b(no|not|don'?t|do not|stop|quit|never|without)\b.{0,70}\b(spanish|espanol)\b"
-    r"|\b(spanish|espanol)\b.{0,40}\b(no|not|don'?t|stop)\b",
+    r"\b(no|not|don'?t|do not|stop|quit|never|without)\b"
+    r"(?:\s+\w+){0,6}\s+(spanish|espanol)\b",
     re.IGNORECASE,
 )
 _NEG_ENGLISH_RE = re.compile(
-    r"\b(no|not|don'?t|do not|stop|quit|never|without)\b.{0,70}\b(english|ingles)\b"
-    r"|\b(english|ingles)\b.{0,40}\b(no|not|don'?t|stop)\b",
+    r"\b(no|not|don'?t|do not|stop|quit|never|without)\b"
+    r"(?:\s+\w+){0,6}\s+(english|ingles)\b",
     re.IGNORECASE,
 )
 
@@ -137,13 +148,17 @@ def detect_language_request(text: str) -> Optional[str]:
         return None
     norm = _norm(text)
 
-    # 1) Peticiones negativas ("no me hables en espanol", "no Spanish").
-    if _NEG_SPANISH_RE.search(norm):
-        return "en"
-    if _NEG_ENGLISH_RE.search(norm):
-        return "es"
+    # 1) Negaciones directas ("no me hables en espanol", "no Spanish").
+    #    Solo en mensajes cortos y sin interrogacion: una pregunta del tipo
+    #    "why don't you ... English voice?" es una queja, no una orden de
+    #    cambiar a espanol.
+    if "?" not in norm and len(norm.split()) <= 14:
+        if _NEG_SPANISH_RE.search(norm):
+            return "en"
+        if _NEG_ENGLISH_RE.search(norm):
+            return "es"
 
-    # 2) Peticiones positivas por frase hecha.
+    # 2) Frases hechas (positivas o negativas ya listadas).
     for phrase in _EN_PHRASES:
         if phrase in norm:
             return "en"
