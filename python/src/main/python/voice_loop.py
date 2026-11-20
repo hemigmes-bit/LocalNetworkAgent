@@ -2547,6 +2547,30 @@ def get_system_prompt_with_context(
 
 
 
+    # Anti-repeticion: con poco contexto el modelo tiende a repetir literalmente
+
+    # la respuesta anterior. Se le muestra y se le prohibe expresamente.
+
+    if history.assistant_responses and not story:
+
+        previous_answer = str(history.assistant_responses[-1] or "").strip()
+
+        if previous_answer:
+
+            context += (
+
+                "\n\nRESPUESTA ANTERIOR (PROHIBIDO repetirla tal cual):\n"
+
+                f"\"{previous_answer[:400]}\"\n"
+
+                "Aporta informacion NUEVA y concreta. Si no la tienes en el "
+
+                "contexto web, di que no la tienes; no repitas la frase anterior."
+
+            )
+
+
+
     # Recuerdos de conversaciones anteriores relevantes para esta pregunta.
 
     if memories and not story:
@@ -4717,10 +4741,20 @@ def _voice_confirmation(text: str) -> Optional[bool]:
     ):
         return False
 
+    # 1) Coincidencia exacta o al inicio (como antes)
     for phrase in _VOICE_YES:
         key = _norm_voice_phrase(phrase)
         if norm == key or norm.startswith(key + " "):
             return True
+
+    # 2) "yes" / "si" / "sí" en cualquier parte de la frase, rodeado de
+    #    límites de palabra o puntuación (", yes", "yes,", " yes ", etc.)
+    #    Esto cubre "to just, yes, change it", "yeah sure", "ok yes please".
+    if re.search(r"\b(si|sí|yes|yeah|yep|ok|okay|claro|vale|sure)\b", norm):
+        # Pero no si está negado: "not yes", "no yes", "don't yes"
+        if not re.search(r"\b(no|not|don't|dont)\s+(si|sí|yes|yeah|yep|ok|okay|claro|vale|sure)\b", norm):
+            return True
+
     return None
 
 
@@ -5650,7 +5684,7 @@ def process_turn(
 
         tool_text = strip_vocative(user_text)
 
-        if emma_tools.needs_tools(tool_text):
+        if emma_tools.should_consult(tool_text):
 
             print("   [TOOLS] Consultando herramientas...")
 
@@ -7267,7 +7301,7 @@ def main():
 
                     tool_text = strip_vocative(user_text)
 
-                    if TOOLS_ENABLED and not story_mode and emma_tools.needs_tools(tool_text):
+                    if TOOLS_ENABLED and not story_mode and emma_tools.should_consult(tool_text):
 
                         print("   [TOOLS] Consultando herramientas...")
 

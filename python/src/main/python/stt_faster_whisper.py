@@ -181,6 +181,20 @@ class FasterWhisperSTT:
 
         forced = language is not None
         first = self._decode(audio, language, beam_size, vad_filter, hotwords)
+
+        # Un "Emma" de medio segundo puede quedarse fuera del VAD interno de
+        # Whisper y volver vacio. En audios cortos se reintenta sin ese filtro,
+        # que es lo unico que puede recuperar el nombre de activacion.
+        if (
+            not first["text"].strip()
+            and vad_filter
+            and len(audio) / 16000.0 <= 3.0
+        ):
+            retry = self._decode(audio, language, beam_size, False, hotwords)
+            if retry["text"].strip():
+                print("   [STT] Recuperado sin VAD (audio corto)")
+                first = retry
+
         detected_language = first["language"]
         chosen = first
         fallback_used = None

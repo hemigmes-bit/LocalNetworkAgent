@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 import urllib.request
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -35,6 +36,89 @@ import web_tools
 MAX_TOOL_RESULT_CHARS = 1100
 MAX_TOOL_CALLS = 3
 SELECTION_NUM_PREDICT = 180
+
+# Ultima consulta web de la sesion: permite responder "cuentame mas" o
+# "amplia la informacion" reutilizando el tema en vez de buscar la frase.
+_LAST_WEB_QUERY = ""
+_LAST_WEB_TIME = 0.0
+_FOLLOWUP_TTL_S = 900.0
+
+_EXPANSION_RE = re.compile(
+    r"\b("
+    r"mas detalles|m[aá]s detalles|ampl[ií]a|ampliar|profundiza|profundizar|"
+    r"desarrolla|desarrollar|explica mejor|expl[ií]came m[aá]s|"
+    r"cu[eé]ntame m[aá]s|dime m[aá]s|sigue explicando|m[aá]s informaci[oó]n|"
+    r"tell me more|tell me something more|more details?|more information|"
+    r"deepen|elaborate|go deeper|expand|explain further|what else"
+    r")\b",
+    re.IGNORECASE,
+)
+
+# Preguntas cortas que solo tienen sentido como seguimiento ("Where is it?").
+_REFERENCE_RE = re.compile(
+    r"^\s*(y|e|and|pero|but|then|entonces)?\s*"
+    r"(donde|cuando|quien|quienes|como|que|cuanto|cuanta|por que|a que|"
+    r"where|when|who|how|what|why|which|it|that|this|eso|esto|el|ella|ellos)\b",
+    re.IGNORECASE,
+)
+
+# Palabras que no identifican un tema: aparecen en cualquier seguimiento.
+_TOPIC_STOP = {
+    "this", "that", "these", "those", "about", "more", "details", "detail",
+    "tell", "please", "much", "very", "what", "where", "when", "which",
+    "there", "their", "have", "with", "from", "just", "okay", "also",
+    "could", "would", "should", "does", "doing", "give", "know", "like",
+    "sobre", "este", "esta", "esto", "estos", "estas", "mas", "como",
+    "donde", "cuando", "quien", "quienes", "para", "porque", "puede",
+    "puedo", "tiene", "tienen", "hace", "otra", "otro", "algo", "algun",
+    "dime", "cuentame", "explica", "informacion", "tema", "detalles",
+}
+
+_WORD_RE = re.compile(r"[0-9a-záéíóúüñ]{4,}", re.IGNORECASE)
+
+
+def _significant_words(text: str) -> set:
+    words = {word.lower() for word in _WORD_RE.findall(str(text or ""))}
+    return words - _TOPIC_STOP
+
+
+def _topic_overlap(text: str, query: str) -> int:
+    return len(_significant_words(text) & _significant_words(query))
+
+
+def needs_followup(text: str) -> bool:
+    """True si el turno amplia la ultima consulta web (dentro de la ventana)."""
+    if not _LAST_WEB_QUERY or (time.time() - _LAST_WEB_TIME) > _FOLLOWUP_TTL_S:
+        return False
+    raw = str(text or "")
+    if _EXPANSION_RE.search(raw):
+        return True
+    # "Who can get access to this digital literacy program?" no dice "more",
+    # pero comparte el tema con la consulta anterior.
+    if _topic_overlap(raw, _LAST_WEB_QUERY) >= 2:
+        return True
+    # "Where is it?" / "y donde nacio": pregunta corta que remite al tema.
+    # Se exige pronombre o conjuncion para no secuestrar una pregunta nueva
+    # ("who can apply for a passport?") y responder del tema anterior.
+    words = re.findall(r"\S+", raw)
+    if len(words) <= 7 and _REFERENCE_RE.match(raw):
+        pronoun = re.search(
+            r"\b(it|that|this|they|them|those|eso|esto|estos|estas|ellos|ellas|"
+            r"ella|aquel|aquella)\b",
+            raw,
+            re.IGNORECASE,
+        )
+        conjunction = re.match(
+            r"^\s*(y|e|and|pero|but|then|entonces)\b", raw, re.IGNORECASE
+        )
+        if pronoun or conjunction or len(words) <= 4:
+            return True
+    return False
+
+
+def should_consult(text: str) -> bool:
+    """Decide si el turno debe pagar la llamada de herramientas."""
+    return needs_tools(text) or needs_followup(text)
 
 
 # ---------------------------------------------------------------------------
@@ -448,6 +532,9 @@ def execute_tool(
     timeout = float(cfg.get("timeout_s", 8))
     try:
         if name == "web_search":
+            global _LAST_WEB_QUERY, _LAST_WEB_TIME
+            _LAST_WEB_QUERY = str(args["query"])
+            _LAST_WEB_TIME = time.time()
             results = web_tools.search_web(
                 args["query"],
                 lang=args.get("lang", "es"),
@@ -455,12 +542,44 @@ def execute_tool(
                 timeout=timeout,
                 config=cfg,
             )
+
+            # El titular y el snippet no bastan para "quien", "donde" o
+            # "como acceder": se descarga el articulo y se adjunta. Si el
+            # primero falla (portada, muro de cookies), se prueba el siguiente.
+            page_chars = int(cfg.get("page_chars", 1800))
+            if page_chars > 0:
+                tried: set = set()
+                for _ in range(min(3, len(results))):
+                    pending = [r for r in results if r.get("url") not in tried]
+                    candidate = _best_fetch_candidate(pending)
+                    if not candidate:
+                        break
+                    tried.add(candidate)
+                    try:
+                        page = web_tools.fetch_page(
+                            candidate, timeout=timeout, max_chars=page_chars
+                        )
+                    except Exception as fetch_error:
+                        print(f"[TOOLS] No se pudo leer el articulo: {fetch_error}")
+                        continue
+                    body = str(page.get("text") or "").strip()
+                    if len(body) < 300:
+                        # Muro de cookies, portada o error: siguiente fuente.
+                        continue
+                    for item in results:
+                        if item.get("url") == candidate:
+                            item["text"] = body
+                            item["title"] = page.get("title") or item.get("title")
+                            break
+                    break
+
             compact = [
                 {
                     "title": _clean(item.get("title"), 140),
                     "url": item.get("url", ""),
                     "site": item.get("site", ""),
                     "snippet": _clean(item.get("snippet"), 220),
+                    "text": str(item.get("text") or "").strip(),
                     "kind": item.get("kind", "search"),
                 }
                 for item in results
@@ -515,6 +634,9 @@ def _compact_result(name: str, result: Dict[str, Any], limit: int) -> str:
                 f"[{item.get('site') or item.get('url')}]: "
                 f"{item.get('snippet') or ''} ({item.get('url')})"
             )
+            body = str(item.get("text") or "").strip()
+            if body:
+                lines.append(f"  Extracto: {body}")
         text = "\n".join(lines)
     elif name == "fetch_page":
         text = f"{data.get('title') or data.get('site')}: {data.get('text') or data.get('snippet') or ''}"
@@ -544,6 +666,30 @@ def gather_tool_context(
     """
     calls = select_tool_calls(user_text, lang, model, url, num_ctx, timeout)
 
+    # Seguimiento ("cuentame mas", "tell me more", "who can access..."):
+    # reutiliza el tema de la ultima busqueda web para ampliar con datos
+    # nuevos, en vez de buscar la frase literal y quedarse sin contexto.
+    reuse_query = needs_followup(user_text)
+    query = ""
+
+    if reuse_query:
+        # El tema anterior manda; las palabras nuevas ("access", "history")
+        # añaden otra cara del mismo asunto para no devolver lo mismo.
+        extra = [
+            word
+            for word in sorted(
+                _significant_words(user_text) - _significant_words(_LAST_WEB_QUERY)
+            )
+            if len(word) > 4
+        ][:3]
+        query = " ".join([_LAST_WEB_QUERY] + extra).strip()
+        calls = [{
+            "function": {
+                "name": "web_search",
+                "arguments": {"query": query, "lang": lang},
+            }
+        }]
+
     # Si el modelo no llama ninguna herramienta pero el turno lo pide, se
     # ejecuta la herramienta adecuada directamente para no perder la capacidad.
     if not calls and needs_tools(user_text):
@@ -571,7 +717,6 @@ def gather_tool_context(
 
     sources: List[Dict[str, Any]] = []
     used: List[str] = []
-    fetched_urls: set = set()
     cfg = config or {}
     assistant_calls: List[Dict[str, Any]] = []
     tool_messages: List[Dict[str, Any]] = []
@@ -622,36 +767,10 @@ def gather_tool_context(
                         "error": "",
                     })
 
-            # Con el resultado de busqueda ya tenemos titulos y enlaces; para
-            # que Emma no hable "de memoria", leemos UN articulo (el mas
-            # profundo, no una portada) y lo devolvemos recortado.
-            candidate = _best_fetch_candidate(payload)
-            if candidate and candidate not in fetched_urls:
-                fetched_urls.add(candidate)
-                page = web_tools.fetch_page(
-                    candidate, timeout=timeout,
-                    max_chars=int(cfg.get("page_chars", 1200)),
-                )
-                if page.get("text"):
-                    assistant_calls.append({
-                        "type": "function",
-                        "function": {"name": "fetch_page", "arguments": {"url": candidate}},
-                    })
-                    tool_messages.append({
-                        "role": "tool",
-                        "tool_name": "fetch_page",
-                        "content": _compact_result(
-                            "fetch_page", {"ok": True, "result": page}, max_result_chars
-                        ),
-                    })
-                    sources.append({
-                        "title": page.get("title") or page.get("site") or candidate,
-                        "url": page.get("url") or candidate,
-                        "site": page.get("site") or "",
-                        "snippet": page.get("snippet") or "",
-                        "kind": "page",
-                        "error": page.get("error") or "",
-                    })
+            # El cuerpo del articulo ya lo adjunta ``execute_tool`` dentro del
+            # propio resultado de ``web_search`` (campo ``text``), asi que no
+            # se vuelve a descargar aqui: duplicaria contexto y anadiria una
+            # fuente repetida a la UI.
         elif name == "fetch_page" and isinstance(payload, dict) and payload.get("url"):
             sources.append({
                 "title": payload.get("title") or payload.get("site") or payload["url"],

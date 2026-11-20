@@ -34,7 +34,8 @@ web:
   max_results: 3             # fuentes maximas que se pasan al LLM
   fetch_pages: 1             # paginas completas a descargar (0 = solo fragmentos)
   timeout_s: 7               # limite por peticion HTTP
-  max_chars: 1200            # texto maximo por fuente (respuestas habladas)
+  max_chars: 2200            # texto maximo por fuente (respuestas habladas)
+  page_chars: 1800           # cuerpo del articulo que se adjunta a la busqueda
   story_max_chars: 1400      # texto maximo de las fuentes curadas para cuentos
   wikipedia: true
   news: true
@@ -53,7 +54,8 @@ web:
 tools:
   enabled: true              # el modelo decide que herramienta usar (web o memoria)
   max_calls: 3               # llamadas por turno
-  max_result_chars: 1100     # recorte de cada resultado (contexto pequeno)
+  max_result_chars: 2800     # recorte de cada resultado (contexto pequeno)
+  page_chars: 1800           # cuerpo del articulo que se adjunta a la busqueda
   selection_timeout_s: 20    # limite de la llamada que elige la herramienta
 song_recognition:
   enabled: true              # reconocer musica grabada (Shazam) y silbidos/tarareos
@@ -164,6 +166,10 @@ system_prompt_v2: |
   - Natural y cálida; varía las frases de ánimo. Si el usuario comparte una emoción, valídala con una frase breve; si es negativa, acompáñalo y no propongas ejercicios en ese turno.
   - No prometas lo que no puedes hacer (reproducir, enviar, buscar). No inventes datos, nombres ni citas: si no lo sabes, dilo.
   - Si te corrigen, admítelo sin excusas y no repitas la respuesta anterior.
+
+  TEMAS Y ACTUALIDAD
+  - Si pide desarrollar, ampliar o profundizar un tema (una noticia, un concepto educativo, "cuéntame más"), responde con hasta 5 frases ordenadas: qué es, a quién afecta o para qué sirve, cómo funciona o cómo se accede, y por qué importa. No te quedes en el titular ni repitas la respuesta anterior.
+  - Usa el CONTEXTO WEB cuando venga: prioriza los datos concretos del artículo (quién, dónde, cuándo, cómo acceder). Si un dato no aparece en las fuentes, di que no lo tienes; no lo inventes.
 
   CORRECCIONES
   - Máximo 2 por turno. "original" debe ser una cita literal de lo que dijo el usuario. Si no hay un error claro, "corrections" va vacío: no corrijas lo que ya es correcto ni reescribas la frase entera.

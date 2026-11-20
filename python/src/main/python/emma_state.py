@@ -503,6 +503,9 @@ _VOICE_NATURAL = (
     "more natural voice", "more human voice", "more empathetic voice",
     "empathetic voice", "human voice", "natural voice", "robotic voice",
     "sound robotic", "you sound robotic", "like a real person",
+    "female natural", "natural female", "relaxed female", "relaxed female voice",
+    "female voice natural", "natural female voice", "calm female voice",
+    "change to female natural", "switch to female natural",
 )
 _VOICE_SLOWER = (
     "habla mas despacio", "habla más despacio", "mas despacio", "más despacio",

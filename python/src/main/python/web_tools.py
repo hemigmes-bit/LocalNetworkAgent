@@ -158,7 +158,16 @@ TRACKER_HOSTS = {
     "outbrain.com",
     "adclick.g.doubleclick.net",
 }
-_TRACKER_PATHS = ("/aclick", "/pagead/", "/aclk", "/clk", "/click?")
+_TRACKER_PATHS = (
+    "/aclick",
+    "/pagead/",
+    "/aclk",
+    "/clk",
+    "/click?",
+    # Redirects de Google News: acaban en la pagina de consentimiento, no en
+    # el articulo, asi que no sirven como fuente.
+    "/rss/articles",
+)
 
 # ---------------------------------------------------------------------------
 # Fuentes curadas para cuentos
@@ -1122,7 +1131,7 @@ def _fetch_via_reader(url: str, timeout: float = 10.0, max_chars: int = 2200) ->
 
 def fetch_page(url: str, timeout: float = 7.0, max_chars: int = 2200) -> Dict[str, Any]:
     """Descarga una pagina y devuelve titulo, texto principal y metadatos."""
-    cached = _cache_get("page:" + url)
+    cached = _cache_get(f"page:{max_chars}:{url}")
     if cached is not None:
         return cached
 
@@ -1150,7 +1159,7 @@ def fetch_page(url: str, timeout: float = 7.0, max_chars: int = 2200) -> Dict[st
                 if response.status_code in READER_FALLBACK_STATUS:
                     reader = _fetch_via_reader(url, timeout, max_chars)
                     if not reader.get("error"):
-                        _cache_put("page:" + url, reader)
+                        _cache_put(f"page:{max_chars}:{url}", reader)
                         return reader
                 result["error"] = f"HTTP {response.status_code}"
                 return result
@@ -1168,14 +1177,14 @@ def fetch_page(url: str, timeout: float = 7.0, max_chars: int = 2200) -> Dict[st
     except requests.Timeout:
         reader = _fetch_via_reader(url, timeout, max_chars)
         if not reader.get("error"):
-            _cache_put("page:" + url, reader)
+            _cache_put(f"page:{max_chars}:{url}", reader)
             return reader
         result["error"] = "Tiempo de espera agotado"
         return result
     except Exception as exc:
         reader = _fetch_via_reader(url, timeout, max_chars)
         if not reader.get("error"):
-            _cache_put("page:" + url, reader)
+            _cache_put(f"page:{max_chars}:{url}", reader)
             return reader
         result["error"] = f"{type(exc).__name__}: {exc}"
         return result
@@ -1201,7 +1210,7 @@ def fetch_page(url: str, timeout: float = 7.0, max_chars: int = 2200) -> Dict[st
     if len(text.strip()) < MIN_USEFUL_CHARS:
         reader = _fetch_via_reader(url, timeout, max_chars)
         if not reader.get("error") and len(reader.get("text") or "") > len(text.strip()):
-            _cache_put("page:" + url, reader)
+            _cache_put(f"page:{max_chars}:{url}", reader)
             return reader
 
     result.update(
@@ -1214,7 +1223,7 @@ def fetch_page(url: str, timeout: float = 7.0, max_chars: int = 2200) -> Dict[st
             "error": "" if text.strip() else "No se pudo extraer texto util",
         }
     )
-    _cache_put("page:" + url, result)
+    _cache_put(f"page:{max_chars}:{url}", result)
     return result
 
 
@@ -1617,6 +1626,45 @@ def _bing_rss(query: str, limit: int, timeout: float) -> List[Dict[str, Any]]:
         return []
 
 
+def _ddgs_news(
+    query: str, limit: int, timeout: float, lang: str = "es"
+) -> List[Dict[str, Any]]:
+    """Noticias con enlace directo al medio via ``ddgs.news()``.
+
+    Google News RSS devuelve redirects que acaban en una pagina de
+    consentimiento, asi que se usa como ultimo recurso. Esta via entrega la
+    URL real del articulo, que si se puede descargar y leer.
+    """
+    try:
+        from ddgs import DDGS
+    except Exception:
+        return []
+    region = "us-en" if lang == "en" else "es-es"
+    try:
+        with DDGS(timeout=timeout) as ddgs:
+            items = list(ddgs.news(query, region=region, max_results=max(1, limit)))
+    except Exception:
+        return []
+
+    results: List[Dict[str, Any]] = []
+    for item in items[:limit]:
+        url = str(item.get("url") or "").strip()
+        title = str(item.get("title") or "").strip()
+        if not url.startswith("http") or not title:
+            continue
+        results.append({
+            "title": title,
+            "url": url,
+            "snippet": re.sub(r"\s+", " ", item.get("body") or "").strip(),
+            "site": str(item.get("source") or "").strip() or _site_name(url),
+            "text": "",
+            "kind": "news",
+            "engine": "ddgs.news",
+            "error": "",
+        })
+    return results
+
+
 def _bing_news_rss(
     query: str, limit: int, timeout: float, lang: str = "es"
 ) -> List[Dict[str, Any]]:
@@ -1710,10 +1758,10 @@ def _wikipedia_search(
     return results
 
 
-def news_search(
-    query: str, limit: int = 4, timeout: float = 6.0, lang: str = "es"
+def _google_news_rss(
+    query: str, limit: int, timeout: float, lang: str = "es"
 ) -> List[Dict[str, Any]]:
-    """Titulares recientes via Google News RSS (edicion es o en)."""
+    """Ultimo recurso: titulares de Google News (su URL no es descargable)."""
     try:
         q = urllib.parse.quote(query or ("latest news" if lang == "en" else "ultima hora"))
         if lang == "en":
@@ -1749,6 +1797,26 @@ def news_search(
         return results
     except Exception:
         return []
+
+
+def news_search(
+    query: str, limit: int = 4, timeout: float = 6.0, lang: str = "es"
+) -> List[Dict[str, Any]]:
+    """Noticias recientes con enlace directo al medio.
+
+    Orden: ``ddgs.news`` (URL real y descargable) -> Bing News RSS (URL real,
+    pero en esta red responde vacio) -> Google News RSS (solo titulares y
+    redirects opacos que acaban en la pagina de consentimiento).
+    """
+    ddgs_items = _ddgs_news(query, limit, timeout, lang)
+    if ddgs_items:
+        return ddgs_items
+
+    bing = _bing_news_rss(query, limit, timeout, lang)
+    if bing:
+        return bing
+
+    return _google_news_rss(query, limit, timeout, lang)
 
 
 def _search_relevance(query: str, result: Dict[str, Any]) -> int:
@@ -1856,6 +1924,12 @@ def search_web(
     wanted = max_results * 3
     normalized: List[Dict[str, Any]] = []
 
+    # Las noticias se piden en paralelo aunque la busqueda general funcione:
+    # los buscadores devuelven portadas y listados, mientras que ``ddgs.news``
+    # da el articulo concreto con su URL real (descargable).
+    news_pool = ThreadPoolExecutor(max_workers=1)
+    news_future = news_pool.submit(_ddgs_news, query, wanted, timeout, lang)
+
     # Motor prioritario: SearXNG local. Si no responde o no devuelve enlaces
     # validos, se conserva la cadena de respaldo que ya tenia Emma.
     if engine == "searxng":
@@ -1920,6 +1994,10 @@ def search_web(
                 if sum(1 for word in keywords if word in haystack) < 2:
                     continue
             item = dict(result)
+            # Una noticia con el tema en el titular aporta el articulo
+            # concreto; una portada generica, no.
+            if str(item.get("kind") or "") == "news":
+                relevance += 1
             item["relevance"] = relevance
             scored.append(item)
         scored.sort(
@@ -1934,24 +2012,39 @@ def search_web(
 
     ranked = _rank(normalized)
 
+    # Articulos de noticias ya descargados en paralelo: suelen ser la unica
+    # fuente con el detalle concreto (quien, donde, como acceder).
+    try:
+        news_items = news_future.result(timeout=max(5.0, timeout + 2))
+    except Exception:
+        news_items = []
+    finally:
+        news_pool.shutdown(wait=False)
+    if news_items:
+        ranked = _rank(normalized + news_items)
+
     if len(ranked) < max_results:
         ranked = _rank(normalized + _bing_rss(query, wanted, timeout))
 
     # Los buscadores generales estan bloqueados por captcha/anti-bot en esta
-    # red; los RSS de noticias responden bien y se consultan en paralelo.
+    # red; las noticias responden bien y se consultan en paralelo. Se piden
+    # primero las que dan enlace directo al medio (ddgs y Bing News).
     if len(ranked) < max_results:
         with ThreadPoolExecutor(max_workers=2) as executor:
-            google_future = executor.submit(news_search, query, wanted, timeout, lang)
+            ddgs_future = executor.submit(_ddgs_news, query, wanted, timeout, lang)
             bing_future = executor.submit(_bing_news_rss, query, wanted, timeout, lang)
             try:
-                news_items = google_future.result()
+                ddgs_items = ddgs_future.result()
             except Exception:
-                news_items = []
+                ddgs_items = []
             try:
                 bing_items = bing_future.result()
             except Exception:
                 bing_items = []
-        ranked = _rank(normalized + news_items + bing_items)
+        ranked = _rank(normalized + ddgs_items + bing_items)
+
+    if len(ranked) < max_results:
+        ranked = _rank(normalized + _google_news_rss(query, wanted, timeout, lang))
 
     # Ultimo recurso para consultas de entidades: API de Wikipedia.
     if not ranked:
@@ -2075,10 +2168,12 @@ def gather_context(
                 config=cfg,
             )
 
-        # Descargar en paralelo solo si aporta: con Wikipedia ya hay texto de sobra.
+        # Descargar en paralelo solo si aporta: con Wikipedia ya hay texto de
+        # sobra. En noticias tambien se baja el articulo: el titular no basta
+        # para responder "quien", "donde" o "como acceder".
         fetch_candidates: List[Dict[str, Any]] = []
-        if intent != "news" and fetch_pages > 0 and not wiki:
-            fetch_candidates = [r for r in results if r.get("kind") == "search"][:fetch_pages]
+        if fetch_pages > 0 and not wiki:
+            fetch_candidates = [r for r in results if r.get("kind") in ("search", "news")][:fetch_pages]
         fetched: Dict[str, Dict[str, Any]] = {}
         if fetch_candidates:
             with ThreadPoolExecutor(max_workers=len(fetch_candidates)) as executor:
@@ -2175,8 +2270,12 @@ def build_context_text(query: str, kind: str, sources: List[Dict[str, Any]]) -> 
             "- Empieza la respuesta citando la fuente principal de forma natural "
             "('segun Wikipedia, ...' o 'segun la BBC, ...'). No leas URLs ni "
             "dominios con .com/.es en voz alta.",
-            "- Responde en dos o tres frases seguidas, sin listas ni viñetas: "
-            "la respuesta se escucha en voz alta.",
+            "- Responde en dos o tres frases seguidas (hasta cinco si el usuario "
+            "pide desarrollar, ampliar o profundizar el tema), sin listas ni "
+            "viñetas: la respuesta se escucha en voz alta.",
+            "- Si el usuario pide detalles, usa los datos concretos del Contenido "
+            "o del Extracto (quien, donde, cuando, como se accede) y no repitas "
+            "el titular ni la respuesta del turno anterior.",
             "- Si hay varias cifras o precios, da el mas relevante o un rango corto.",
             "- Si las fuentes no responden a la pregunta, dilo con claridad y no inventes datos.",
             "- No inventes cifras, precios ni fechas: usa solo las que aparezcan en el "
