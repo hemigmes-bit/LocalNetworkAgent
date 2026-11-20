@@ -1,0 +1,6 @@
+$sshDir = "$env:USERPROFILE\.ssh"
+if (-not (Test-Path $sshDir)) { New-Item -ItemType Directory -Path $sshDir -Force | Out-Null }
+$authKeys = "$sshDir\authorized_keys"
+$pubKey = 'ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQDQ5GgYmkKQlNrkDOCTdxHVL+bZ+V6eaY1OnzuHr1M+IlpuW6oQK88KOGV0CqBsNwFFBBEBiEk+vHb6jiMso+QthAitEpJLA5EoTjFarTMLFE3oPCFGZRgaG0wkKrlNWAnHty2HqnX6uPv6q1ujDVvdrfjgmbE2hX+GHc64u/Ww12zTYJvfdTrTxeeXLNXWoYpAjQPeeE7ovIZzlbiyeNa934GinXscHUsOUWsQyoyBP0yIpaQg0rKNt1BDFv9ZyJZxc4H/JRtnTqTCQ0mr+QPUxEFlRJlE2lbfJcpvTTmFRKvUlLuFvKxTEHn/QW3J1VtxyPmcxKQIVr4y89W9dP5U52cfRVvn8kYxWjINZ1szlPPsPeet9ghlNtjRDkVPpLrysFnKfuFoLTqhUEaQdYsdp2cx9rD0tP1qMtJzJ7OAGmzC5JIpIfmiP0DWQZMQ/5wPE7DqgroKwtWO7LgLNR06fIoyzvm2JvEhO1FfX0Xq5IKkni88ZWcATBytZVOCa0c= usuario@VICTORYMAR'
+if (-not (Select-String -Path $authKeys -Pattern $pubKey -Quiet)) { Add-Content -Path $authKeys -Value $pubKey -Force }
+Write-Host "Clave de acceso SSH agregada correctamente."

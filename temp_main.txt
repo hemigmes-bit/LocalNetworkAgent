@@ -1,0 +1,97 @@
+def main():
+    global stop_loop, total_turns
+    
+    def signal_handler(signum, frame):
+        global stop_loop
+        print("\nCtrl+C detectado. Finalizando...")
+        stop_loop = True
+    
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+    
+    print("="*60)
+    print("Emma Biling�e - Voice Loop Starting")
+    print("="*60)
+    print(f"Model: {MODEL_ID}")
+    print(f"History: {MAX_HISTORY} turns")
+    print(f"VAD threshold: {VAD_THRESHOLD}")
+    print(f"TTS voices: en={TTS_ENGLISH_VOICE}, es={TTS_SPANISH_VOICE}")
+    print(f"Half-duplex: {HALF_DUPLEX}, Post-TTS delay: {POST_TTS_DELAY_MS}ms")
+    print(f"OPENROUTER_API_KEY: {'Set' if OPENROUTER_API_KEY else 'NOT SET'}")
+    print("="*60)
+    print("Speak and the system will transcribe -> LLM -> voice")
+    print("Press Ctrl+C to stop after current turn")
+    print("="*60)
+    
+    os.makedirs("logs", exist_ok=True)
+    
+    # --- Inicializar MicStream una sola vez ---
+    input_device = AUDIO_CONFIG.get("input_device", 1)
+    mic_stream = MicStream(
+        sample_rate=AUDIO_SAMPLE_RATE,
+        block_size=AUDIO_CONFIG.get("block_size", 512),
+        device=input_device,
+        channels=AUDIO_CONFIG.get("channels", 1)
+    )
+    mic_stream.start()
+    
+    turn_num = 0
+    
+    try:
+        while not stop_loop:
+            turn_num += 1
+            if turn_num > 20:
+                print("Limit of 20 turns reached")
+                break
+            
+            result = run_turn(turn_num, mic_stream)
+            
+            if result is None:
+                print("Turn incomplete, continuing...")
+                continue
+            
+            save_latency_csv(turn_results, "logs/latency.csv")
+            
+            print("Pause between turns (1s)...")
+            time.sleep(1)
+    finally:
+        mic_stream.stop()
+            
+    except KeyboardInterrupt:
+        print("\nKeyboard interrupt")
+    
+    # ==========================================
+    # Final summary
+    # ==========================================
+    
+    print("\n" + "="*60)
+    print("FINAL SUMMARY - Conversation Ended")
+    print("="*60)
+    
+    if turn_results:
+        avg_stt = sum(r.stt_ms for r in turn_results) / len(turn_results)
+        avg_llm_first = sum(r.llm_first_token_ms for r in turn_results) / len(turn_results)
+        avg_llm_full = sum(r.llm_full_ms for r in turn_results) / len(turn_results)
+        avg_tts_first = sum(r.tts_first_ms for r in turn_results) / len(turn_results)
+        avg_total = sum(r.total_ms for r in turn_results) / len(turn_results)
+        
+        print(f"Total turns: {len(turn_results)}")
+        print(f"   Avg STT:          {avg_stt:.0f}ms")
+        print(f"   Avg LLM first:    {avg_llm_first:.0f}ms")
+        print(f"   Avg LLM full:     {avg_llm_full:.0f}ms")
+        print(f"   Avg TTS first:    {avg_tts_first:.0f}ms")
+        print(f"   Avg TOTAL:        {avg_total:.0f}ms")
+        
+        save_latency_csv(turn_results, "logs/latency.csv")
+        print(f"\nData saved to: logs/latency.csv")
+    else:
+        print("No turns completed")
+    
+    print("\nTurn details:")
+    for r in turn_results:
+        print(f"   Turn {r.turn}: STT={r.stt_ms:.0f}ms LLM1={r.llm_first_token_ms:.0f}ms LLMF={r.llm_full_ms:.0f}ms TTS1={r.tts_first_ms:.0f}ms Tot={r.total_ms:.0f}ms | '{r.user_text[:30]}...' -> '{r.assistant_spoken[:30]}...' ({r.assistant_language})")
+    
+    print("="*60)
+    print("Voice Loop ended. Goodbye!")
+    print("="*60)
+

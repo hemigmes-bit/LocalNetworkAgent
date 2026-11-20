@@ -1,0 +1,1 @@
+Get-NetFirewallRule -Action Allow -Direction Outbound | Select-Object DisplayName, Action, Direction, Profile, Priority | Sort-Object Priority

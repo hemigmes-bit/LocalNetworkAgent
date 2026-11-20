@@ -1,0 +1,1 @@
+Start-Process powershell.exe -Verb RunAs -ArgumentList "-ExecutionPolicy Bypass -File `"$PSScriptPath`""

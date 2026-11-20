@@ -1,0 +1,45 @@
+{"type": "event", "event": "test", "details": "integracion ok", "ts": "2026-10-31T01:54:24"}
+{"type": "event", "event": "startup", "details": "Emma GUI arrancada", "ts": "2026-10-31T02:05:44"}
+{"type": "event", "event": "startup", "details": "Emma GUI arrancada", "ts": "2026-10-31T02:06:04"}
+{"type": "event", "event": "startup", "details": "Emma GUI arrancada", "ts": "2026-10-31T02:07:10"}
+{"type": "event", "event": "startup", "details": "Emma GUI arrancada", "ts": "2026-10-31T02:09:47"}
+{"type": "event", "event": "startup", "details": "Emma GUI arrancada", "ts": "2026-10-31T02:10:37"}
+{"type": "event", "event": "startup", "details": "Emma GUI arrancada", "ts": "2026-10-31T02:18:02"}
+{"type": "event", "event": "startup", "details": "Emma GUI arrancada", "ts": "2026-10-31T08:37:46"}
+{"type": "event", "event": "launch_app", "details": "outlook", "ts": "2026-10-31T08:41:38"}
+{"type": "event", "event": "assistant_cmd", "details": "Check my inbox now.", "ts": "2026-10-31T08:41:38"}
+{"type": "event", "event": "startup", "details": "Emma GUI arrancada", "ts": "2026-10-31T08:42:58"}
+{"type": "event", "event": "startup", "details": "Emma GUI arrancada", "ts": "2026-10-31T08:44:27"}
+{"type": "event", "event": "startup", "details": "Emma GUI arrancada", "ts": "2026-10-31T08:47:22"}
+{"type": "event", "event": "startup", "details": "Emma GUI arrancada", "ts": "2026-10-31T08:49:00"}
+{"type": "event", "event": "startup", "details": "Emma GUI arrancada", "ts": "2026-10-31T08:51:48"}
+{"type": "event", "event": "startup", "details": "Emma GUI arrancada", "ts": "2026-10-31T08:52:41"}
+{"type": "event", "event": "startup", "details": "Emma GUI arrancada", "ts": "2026-10-31T08:53:46"}
+{"type": "event", "event": "launch_app", "details": "Brave", "ts": "2026-10-31T09:11:09"}
+{"type": "event", "event": "assistant_cmd", "details": "Open Brave, please, now.", "ts": "2026-10-31T09:11:09"}
+{"type": "event", "event": "startup", "details": "Emma GUI arrancada", "ts": "2026-10-31T09:11:19"}
+{"type": "event", "event": "shutdown", "details": "Sesion terminada", "ts": "2026-10-31T09:11:39"}
+{"type": "event", "event": "startup", "details": "Emma GUI arrancada", "ts": "2026-10-31T09:57:00"}
+{"type": "event", "event": "startup", "details": "Emma GUI arrancada", "ts": "2026-10-31T09:58:07"}
+{"type": "event", "event": "startup", "details": "Emma GUI arrancada", "ts": "2026-10-31T10:00:13"}
+{"type": "event", "event": "startup", "details": "Emma GUI arrancada", "ts": "2026-10-31T10:02:48"}
+{"type": "event", "event": "startup", "details": "Emma GUI arrancada", "ts": "2026-10-31T10:05:15"}
+{"type": "event", "event": "launch_app", "details": "brave", "ts": "2026-10-31T10:20:51"}
+{"type": "event", "event": "launch_app", "details": "brave", "ts": "2026-10-31T10:20:51"}
+{"type": "event", "event": "launch_app", "details": "brave", "ts": "2026-10-31T10:20:51"}
+{"type": "event", "event": "startup", "details": "Emma GUI arrancada", "ts": "2026-10-31T10:21:00"}
+{"type": "event", "event": "startup", "details": "Emma GUI arrancada", "ts": "2026-10-31T13:24:56"}
+{"type": "event", "event": "launch_app", "details": "brave", "ts": "2026-10-31T13:32:35"}
+{"type": "event", "event": "assistant_cmd", "details": "I just told you. I need you to open Brave Web browser.", "ts": "2026-10-31T13:32:35"}
+{"type": "event", "event": "launch_app", "details": "outlook", "ts": "2026-10-31T13:33:41"}
+{"type": "event", "event": "assistant_cmd", "details": "I told you, I need you to open my inbox email. Outlook!", "ts": "2026-10-31T13:33:41"}
+{"type": "event", "event": "startup", "details": "Emma GUI arrancada", "ts": "2026-10-31T13:36:19"}
+{"type": "event", "event": "startup", "details": "Emma GUI arrancada", "ts": "2026-10-31T13:38:52"}
+{"type": "event", "event": "startup", "details": "Emma GUI arrancada", "ts": "2026-10-31T13:39:22"}
+{"type": "event", "event": "startup", "details": "Emma GUI arrancada", "ts": "2026-10-31T13:59:21"}
+{"type": "event", "event": "startup", "details": "Emma GUI arrancada", "ts": "2026-10-31T18:33:42"}
+{"type": "event", "event": "startup", "details": "Emma GUI arrancada", "ts": "2026-10-31T18:43:45"}
+{"type": "event", "event": "startup", "details": "Emma GUI arrancada", "ts": "2026-10-31T18:48:27"}
+{"type": "event", "event": "startup", "details": "Emma GUI arrancada", "ts": "2026-10-31T18:50:02"}
+{"type": "event", "event": "startup", "details": "Emma GUI arrancada", "ts": "2026-10-31T18:58:36"}
+{"type": "event", "event": "startup", "details": "Emma GUI arrancada", "ts": "2026-10-31T18:59:11"}

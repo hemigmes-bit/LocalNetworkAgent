@@ -1,4 +1,4 @@
-$projectPath = "C:\Users\Usuario\LocalNetworkAgent"
+﻿$projectPath = "C:\Users\Usuario\LocalNetworkAgent"
 $outFile = Join-Path $projectPath "victorymar-cred.xml"
 
 $username = $env:USERNAME

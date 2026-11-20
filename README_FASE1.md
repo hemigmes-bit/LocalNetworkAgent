@@ -4,9 +4,9 @@ Esta entrega es una **copia de trabajo**, no sustituye tu instalación actual. C
 
 ## Cambios incluidos
 - Se elimina la primera implementación duplicada de `main()` (llamaba a `run_turn` con una firma incompatible y limitaba la sesión a 20 turnos).
-- faster-whisper respeta `beam_size` y `vad_filter` de configuración; `language: null` activa autodetección para el uso bilingüe.
-- El modelo y URL de Ollama pasan a ser configurables en `config.yaml`, manteniendo `qwen2.5-coder:7b` como valor por defecto.
-- Kokoro toma las voces de `config.yaml`; el cambio de voz actualiza el mapa activo.
+- faster-whisper respeta `beam_size` y `vad_filter` de configuración; `language: null` activa autodetección y, si detecta un idioma ajeno (griego, ruso...), reintenta en español e inglés y elige la mejor transcripción.
+- El modelo y URL de Ollama pasan a ser configurables en `config.yaml`, usando `qwen2.5:7b-instruct` como valor por defecto.
+- Kokoro toma las voces de `config.yaml`, fonemiza cada voz en su idioma real (español incluido) y aplica la velocidad configurada; el cambio de voz actualiza el mapa activo y se guarda en `emma_prefs.json`.
 - Se corrigen dos errores de `ProfileManager`: variable `item` inexistente en SRS y cadenas literales en vez de los textos reales al guardar resúmenes.
 - Guardado JSON atómico para reducir el riesgo de corrupción por interrupción.
 - Se añade importador JSON→SQLite idempotente que conserva los campos originales y no usa `turno` como clave única.

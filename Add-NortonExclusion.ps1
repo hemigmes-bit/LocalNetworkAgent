@@ -1,4 +1,4 @@
-# Add-NortonExclusion.ps1 - Ejecutar como Administrador
+﻿# Add-NortonExclusion.ps1 - Ejecutar como Administrador
 
 $projectPath = "C:\Users\Usuario\LocalNetworkAgent"
 

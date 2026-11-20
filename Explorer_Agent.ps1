@@ -1,4 +1,4 @@
-param(
+﻿param(
     [string]$ComputerName = "",
     [string]$Mode = "Browse",
     [string]$SourceFileName = "",
@@ -583,6 +583,57 @@ $remoteList.Add_SelectedIndexChanged({
     $lblSelCount.Text = "$c objeto(s) seleccionado(s)  |  Remoto: $global:remotePath"
 })
 
+# ========== SMB HELPERS ==========
+function Connect-SmbShare {
+    param([string]$ip)
+    Disconnect-SmbShare -ip $ip
+    $c = Get-Credential-ForIP -ip $ip
+    if (-not $c) {
+        $null = net use "\\$ip\C$" 2>&1
+        return ($LASTEXITCODE -eq 0)
+    }
+    $pw = $c.GetNetworkCredential().Password
+    $null = net use "\\$ip\C$" /user:$($c.UserName) $pw 2>&1
+    return ($LASTEXITCODE -eq 0)
+}
+
+function Disconnect-SmbShare {
+    param([string]$ip)
+    $null = net use "\\$ip\C$" /delete /y 2>&1
+}
+
+function ConvertTo-UncPath {
+    param([string]$ip, [string]$path)
+    if ($path -match '^([A-Za-z]):(.*)$') {
+        return ("\\" + $ip + "\" + $Matches[1].ToUpper() + '$' + $Matches[2])
+    }
+    return $path
+}
+
+function Invoke-RobocopyJob {
+    param([string]$SrcDir, [string]$DstDir, [string]$FilePattern, $StatusLabel)
+    $log = Join-Path $env:TEMP ("robocopy_" + [guid]::NewGuid().ToString('N') + ".log")
+    $argLine = @(
+        ('"' + $SrcDir + '"'),
+        ('"' + $DstDir + '"'),
+        ('"' + $FilePattern + '"'),
+        '/NP', '/NDL', '/NFL', '/J', '/R:1', '/W:1',
+        ('/LOG:"' + $log + '"')
+    ) -join ' '
+    $proc = Start-Process robocopy.exe -ArgumentList $argLine -PassThru -WindowStyle Hidden
+    while (-not $proc.HasExited) {
+        [System.Windows.Forms.Application]::DoEvents()
+        Start-Sleep -Milliseconds 100
+    }
+    $rc = $proc.ExitCode
+    if ($rc -ge 8 -and $StatusLabel -and (Test-Path $log)) {
+        $tail = (Get-Content $log -Tail 3 -ErrorAction SilentlyContinue) -join ' | '
+        $StatusLabel.Text = "Robocopy error $rc : $tail"
+    }
+    Remove-Item $log -Force -ErrorAction SilentlyContinue
+    return ($rc -lt 8)
+}
+
 # ========== TRANSFER ==========
 function Transfer-File {
     param([string]$SourcePath, [string]$SourcePC, [string]$DestPath, [string]$DestPC, [string]$Direction)
@@ -604,8 +655,6 @@ function Transfer-File {
 
     $fromLabel = if ($SourcePC -eq "local") { $localName } else { $remoteName }
     $toLabel = if ($DestPC -eq "local") { $localName } else { $remoteName }
-
-    $temp = Join-Path $env:TEMP $fname
 
     # Simple progress dialog
     $pf = New-Object Windows.Forms.Form
@@ -640,7 +689,7 @@ function Transfer-File {
     $lblStatus.Size = New-Object Drawing.Size(380, 18)
     $lblStatus.Font = New-Object Drawing.Font("Segoe UI", 8)
     $lblStatus.ForeColor = [Drawing.Color]::FromArgb(0, 120, 215)
-    $lblStatus.Text = "Transfiriendo..."
+    $lblStatus.Text = "Conectando..."
 
     $pf.Controls.Add($lblTitle)
     $pf.Controls.Add($lblInfo)
@@ -652,32 +701,59 @@ function Transfer-File {
     $start = Get-Date
 
     $ok = $false
+    $viaSmb = $false
     try {
-        if ($SourcePC -ne "local") {
-            Copy-Item -FromSession $global:psSession -Path $SourcePath -Destination $temp -Force -ErrorAction Stop
-        } else {
-            Copy-Item -Path $SourcePath -Destination $temp -Force -ErrorAction Stop
+        $smbOk = Connect-SmbShare -ip $remoteIP
+        if ($smbOk) {
+            $viaSmb = $true
+            $lblStatus.Text = "Transferencia directa por SMB (rapida)..."
+            [System.Windows.Forms.Application]::DoEvents()
+
+            if ($SourcePC -eq "local") {
+                $srcDir = Split-Path $SourcePath -Parent
+                $dstDir = ConvertTo-UncPath -ip $remoteIP -path $DestPath
+                $ok = Invoke-RobocopyJob -SrcDir $srcDir -DstDir $dstDir -FilePattern $fname -StatusLabel $lblStatus
+            } else {
+                $uncSrc = ConvertTo-UncPath -ip $remoteIP -path $SourcePath
+                $srcDir = Split-Path $uncSrc -Parent
+                $ok = Invoke-RobocopyJob -SrcDir $srcDir -DstDir $DestPath -FilePattern $fname -StatusLabel $lblStatus
+            }
         }
-        if ($DestPC -ne "local") {
-            Copy-Item -ToSession $global:psSession -Path $temp -Destination $DestPath -Force -ErrorAction Stop
-        } else {
-            Copy-Item -Path $temp -Destination $DestPath -Force -ErrorAction Stop
+        else {
+            $lblStatus.Text = "SMB no disponible, usando WinRM..."
+            [System.Windows.Forms.Application]::DoEvents()
+            if ($SourcePC -ne "local") {
+                Copy-Item -FromSession $global:psSession -Path $SourcePath -Destination (Join-Path $DestPath $fname) -Force -ErrorAction Stop
+            } else {
+                Copy-Item -ToSession $global:psSession -Path $SourcePath -Destination $DestPath -Force -ErrorAction Stop
+            }
+            $ok = $true
         }
-        $ok = $true
+        if (-not $ok -and $viaSmb) {
+            $lblStatus.Text = "SMB fallo, reintentando por WinRM..."
+            [System.Windows.Forms.Application]::DoEvents()
+            if ($SourcePC -ne "local") {
+                Copy-Item -FromSession $global:psSession -Path $SourcePath -Destination (Join-Path $DestPath $fname) -Force -ErrorAction Stop
+            } else {
+                Copy-Item -ToSession $global:psSession -Path $SourcePath -Destination $DestPath -Force -ErrorAction Stop
+            }
+            $ok = $true
+        }
     } catch {
         $lblStatus.Text = "Error: $($_.Exception.Message)"
         $lblStatus.ForeColor = [Drawing.Color]::Red
         [System.Windows.Forms.Application]::DoEvents()
         Start-Sleep -Seconds 2
     } finally {
-        if (Test-Path $temp) { Remove-Item $temp -Force -ErrorAction SilentlyContinue }
+        if ($viaSmb) { Disconnect-SmbShare -ip $remoteIP }
     }
 
     if ($ok) {
         $elapsed = [math]::Max(0.1, ((Get-Date) - $start).TotalSeconds)
         $bar.Style = "Continuous"
         $bar.Value = 100
-        $lblStatus.Text = "Completado en ${elapsed}s"
+        $mbps = if ($elapsed -gt 0 -and $fsize -gt 0) { [math]::Round(($fsize / 1MB) / $elapsed, 1) } else { 0 }
+        $lblStatus.Text = "Completado en $([math]::Round($elapsed,1))s ($mbps MB/s)"
         $lblStatus.ForeColor = [Drawing.Color]::Green
         [System.Windows.Forms.Application]::DoEvents()
         Start-Sleep -Seconds 1

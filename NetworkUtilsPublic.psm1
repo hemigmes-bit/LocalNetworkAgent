@@ -1,4 +1,4 @@
-﻿# NetworkUtilsPublic.psm1 - Local Network Agent Core Utilities v2.4.0 (PRO)
+# NetworkUtilsPublic.psm1 - Local Network Agent Core Utilities v2.4.0 (PRO)
 # =============================================================================
 
 $Global:ProjectRoot = $PSScriptRoot
@@ -124,21 +124,36 @@ function Get-RemoteDirectory {
 function Copy-BetweenRemotes {
     param($SourceComp, $SourcePath, $DestComp, $DestPath, [PSCredential]$Credential)
     try {
-        $tempFile = "$env:TEMP\net-transfer-$(Get-Random).tmp"
-        Write-Host "Paso 1: Descargando desde $SourceComp..." -ForegroundColor Gray
-        $s1 = New-PSSession -ComputerName $SourceComp -Credential $Credential
-        Copy-Item -FromSession $s1 -Path $SourcePath -Destination $tempFile -Force
-        Remove-PSSession $s1
-
-        Write-Host "Paso 2: Subiendo a $DestComp..." -ForegroundColor Gray
-        $s2 = New-PSSession -ComputerName $DestComp -Credential $Credential
-        Copy-Item -ToSession $s2 -Path $tempFile -Destination $DestPath -Force
-        Remove-PSSession $s2
-
-        Remove-Item $tempFile -Force
+        Write-Host "Iniciando transferencia directa $SourceComp -> $DestComp..." -ForegroundColor Gray
+        
+        # Determine destination folder
+        $destFolder = Split-Path $DestPath -Parent
+        
+        # Create remote script that runs on SOURCE machine to copy directly to DEST
+        $scriptBlock = {
+            param($SourceFile, $DestComputer, $DestFolder, $Credential)
+            # Ensure destination folder exists
+            $destSession = New-PSSession -ComputerName $DestComputer -Credential $Credential
+            Invoke-Command -Session $destSession -ScriptBlock {
+                param($folder) if (-not (Test-Path $folder)) { New-Item -ItemType Directory -Path $folder -Force | Out-Null }
+            } -ArgumentList $DestFolder
+            Remove-PSSession $destSession
+            
+            # Copy directly from source to dest using ToSession
+            $destSession = New-PSSession -ComputerName $DestComputer -Credential $Credential
+            Copy-Item -ToSession $destSession -Path $SourceFile -Destination $DestFolder -Force
+            Remove-PSSession $destSession
+        }
+        
+        # Execute on source machine
+        $sourceSession = New-PSSession -ComputerName $SourceComp -Credential $Credential
+        Invoke-Command -Session $sourceSession -ScriptBlock $scriptBlock -ArgumentList $SourcePath, $DestComp, $destFolder, $Credential
+        Remove-PSSession $sourceSession
+        
+        Write-Host "Transferencia completada: $SourcePath -> $DestPath" -ForegroundColor Green
         return $true
     } catch {
-        Write-Host "Error en transferencia: $_" -ForegroundColor Red
+        Write-Host "Error en transferencia directa: $_" -ForegroundColor Red
         return $false
     }
 }
@@ -523,4 +538,65 @@ function Invoke-ScheduledTasks {
 }
 
 
-Export-ModuleMember -Function *
+function Invoke-SSHCommand {
+    param(
+        [string]$ComputerName,
+        [string]$User = "user",
+        [string]$Command,
+        [switch]$Quiet
+    )
+    try {
+        $arg = "-o StrictHostKeyChecking=no -o BatchMode=yes -o ConnectTimeout=10 $($User)@$($ComputerName) `"$Command`""
+        $proc = Start-Process ssh -ArgumentList $arg -PassThru -WindowStyle Hidden -RedirectStandardOutput "$env:TEMP\ssh_out.txt" -RedirectStandardError "$env:TEMP\ssh_err.txt"
+        $proc.WaitForExit()
+        $stdout = if (Test-Path "$env:TEMP\ssh_out.txt") { Get-Content "$env:TEMP\ssh_out.txt" -Raw } else { "" }
+        $stderr = if (Test-Path "$env:TEMP\ssh_err.txt") { Get-Content "$env:TEMP\ssh_err.txt" -Raw } else { "" }
+        Remove-Item "$env:TEMP\ssh_out.txt", "$env:TEMP\ssh_err.txt" -Force -ErrorAction SilentlyContinue
+        if (-not $Quiet) {
+            if ($proc.ExitCode -eq 0) {
+                Write-Host ("[SSH] " + $ComputerName + ": " + $Command) -ForegroundColor Green
+            } else {
+                Write-Host ("[SSH ERROR] " + $ComputerName + " : " + $stderr) -ForegroundColor Red
+            }
+        }
+        return if ($proc.ExitCode -eq 0) { $stdout.Trim() } else { $null }
+    } catch {
+        Write-Host "Error SSH: $_" -ForegroundColor Red
+        return $null
+    }
+}
+
+function Invoke-RemoteCommand {
+    param($ComputerName, $Command, $Credential)
+    $cfg = Get-NetworkConfig
+    $dev = $cfg.Computers | Where-Object { $_.IPAddress -eq $ComputerName -or $_.Name -eq $ComputerName } | Select-Object -First 1
+    if ($dev -and $dev.Management -eq "SSH") {
+        Invoke-SSHCommand -ComputerName $dev.IPAddress -User $dev.User -Command $Command
+    } else {
+        Invoke-Command -ComputerName $ComputerName -Credential $Credential -ScriptBlock [scriptblock]::Create($Command) -ErrorAction SilentlyContinue
+    }
+}
+
+function Get-RemoteSystemInfo {
+    param($ComputerName, $Credential)
+    $sb = {
+        [PSCustomObject]@{
+            OS = (Get-CimInstance Win32_OperatingSystem).Caption
+            CPUCount = (Get-CimInstance Win32_ComputerSystem).NumberOfLogicalProcessors
+            TotalRAMGB = [math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory / 1GB, 2)
+        }
+    }
+    $cfg = Get-NetworkConfig
+    $dev = $cfg.Computers | Where-Object { $_.IPAddress -eq $ComputerName -or $_.Name -eq $ComputerName } | Select-Object -First 1
+    if ($dev -and $dev.Management -eq "SSH") {
+        $json = Invoke-SSHCommand -ComputerName $dev.IPAddress -User $dev.User -Command 'Get-CimInstance Win32_OperatingSystem | Select-Object Caption | ConvertTo-Json -Compress'
+        if ($json) {
+            $os = ($json | ConvertFrom-Json).Caption
+            return [PSCustomObject]@{ OS = $os; CPUCount = 0; TotalRAMGB = 0 }
+        }
+        return @{ error = 'ssh-fail' }
+    }
+    $p = @{ComputerName=$ComputerName; ScriptBlock=$sb; ErrorAction='Stop'}
+    if ($Credential) { $p.Credential = $Credential } else { $stored = Get-StoredCredential; if ($stored) { $p.Credential = $stored } }
+    try { return Invoke-Command @p } catch { return @{ error = 'remote-fail' } }
+}

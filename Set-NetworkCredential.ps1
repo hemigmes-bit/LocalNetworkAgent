@@ -1,4 +1,4 @@
-# Configura las credenciales de red
+﻿# Configura las credenciales de red
 $credPath = Join-Path $PSScriptRoot "core0-cred.xml"
 Write-Host "=== CONFIGURADOR DE CREDENCIALES DE RED ===" -ForegroundColor Cyan
 Write-Host "Introduzca usuario (ej: .\Administrador) y contraseña"

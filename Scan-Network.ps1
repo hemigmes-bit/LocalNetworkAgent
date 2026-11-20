@@ -1,4 +1,4 @@
-param([string]$Subnet)
+﻿param([string]$Subnet)
 $config = Get-Content "C:\Users\Usuario\LocalNetworkAgent\network-config.json" | ConvertFrom-Json
 if (-not $Subnet) { $Subnet = $config.SubnetPrefix }
 
@@ -36,7 +36,7 @@ for ($i = 1; $i -le 254; $i++) {
             } catch {}
             
             if ($ip -match "\.1$") { $desc = "Router" }
-            elseif ($name -match "livebox|router|modem|fiber") { $desc = "Router" }
+            elseif ($name -match "livebox|ztel|digi|router|modem|fiber") { $desc = "Router" }
             elseif ($isWindows) { $desc = "Windows" }
             elseif ($isSSH) { $desc = "Linux" }
             elseif ($isWeb) { $desc = "Web" }

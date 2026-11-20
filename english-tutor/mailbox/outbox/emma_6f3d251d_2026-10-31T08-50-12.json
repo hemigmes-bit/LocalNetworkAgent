@@ -1,0 +1,16 @@
+{
+  "id": "6f3d251d",
+  "from": "emma",
+  "type": "architecture_review",
+  "subject": "Revision de arquitectura",
+  "body": "Emma solicita revision de su arquitectura y sugerencias de mejora.",
+  "files": [
+    "assistant.py",
+    "emma_gui.py",
+    "tutor.py",
+    "voice.py",
+    "self_improve.py"
+  ],
+  "status": "open",
+  "created": "2026-10-31T08:50:12"
+}

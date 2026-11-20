@@ -1,4 +1,4 @@
-param()
+﻿param()
 
 # Function to check if the script is being run from an elevated session
 function Test-Elevated {

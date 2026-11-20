@@ -1,4 +1,4 @@
-# Script para ejecutar comandos en CORE0 remotamente
+﻿# Script para ejecutar comandos en CORE0 remotamente
 param(
     [string]$Command = "diagnose"
 )

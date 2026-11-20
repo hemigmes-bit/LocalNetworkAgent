@@ -1,0 +1,40 @@
+Line 551: indent=5 
+Line 552: indent=4     def _playback_loop(self):
+Line 553: indent=4     """Bucle de reproducci�n: saca texto de cola, sintetiza y reproduce."""
+Line 554: indent=4     try:
+Line 555: indent=4     while not self.stop_event.is_set() or not self.queue.empty():
+Line 556: indent=4     try:
+Line 557: indent=4     text, language = self.queue.get(timeout=0.1)
+Line 558: indent=4     except queue.Empty:
+Line 559: indent=4     continue
+Line 560: indent=1 
+Line 561: indent=4     try:
+Line 562: indent=4     voice = select_voice(language)
+Line 563: indent=4     audio = tts.synthesize(text, lang=language)
+Line 564: indent=1 
+Line 565: indent=4     import sounddevice as sd
+Line 566: indent=4     sd.play(audio, samplerate=self.sample_rate)
+Line 567: indent=4     sd.wait()
+Line 568: indent=4     except Exception as e:
+Line 569: indent=4     print(f"[TTS Streaming] Error: {e}")
+Line 570: indent=4     finally:
+Line 571: indent=4     self.queue.task_done()
+Line 572: indent=4     finally:
+Line 573: indent=4     self.playing = False
+Line 574: indent=1 
+Line 575: indent=1 
+Line 576: indent=1 
+Line 577: indent=1 
+Line 578: indent=1 
+Line 579: indent=0 def run_turn(turn_num: int, mic_stream, memoria):
+Line 580: indent=4     global stop_loop
+Line 581: indent=5 
+Line 582: indent=4     print(f"\n{'='*60}")
+Line 583: indent=4     print(f"TURNO {turn_num} INICIANDO")
+Line 584: indent=4     print(f"{'='*60}")
+Line 585: indent=5 
+Line 586: indent=4     turn_start = time.perf_counter()
+Line 587: indent=5 
+Line 588: indent=4     # --- ETAPA 1: Capturar audio con VAD ---
+Line 589: indent=4     print("1. Escuchando... (di algo y haz una pausa)")
+Line 590: indent=5 

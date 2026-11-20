@@ -1,0 +1,30 @@
+Line 556: indent=5 
+Line 557: indent=4     def _playback_loop(self):
+Line 558: indent=8         """Bucle de reproducci�n: saca texto de cola, sintetiza y reproduce."""
+Line 559: indent=8         try:
+Line 560: indent=12             while not self.stop_event.is_set() or not self.queue.empty():
+Line 561: indent=16                 try:
+Line 562: indent=20                     text, language = self.queue.get(timeout=0.1)
+Line 563: indent=16                 except queue.Empty:
+Line 564: indent=20                     continue
+Line 565: indent=16                 try:
+Line 566: indent=20                     voice = select_voice(language)
+Line 567: indent=20                     audio = tts.synthesize(text, lang=language)
+Line 568: indent=20                     import sounddevice as sd
+Line 569: indent=20                     sd.play(audio, samplerate=self.sample_rate)
+Line 570: indent=20                     sd.wait()
+Line 571: indent=16                 except Exception as e:
+Line 572: indent=20                     print(f"[TTS Streaming] Error: {e}")
+Line 573: indent=16                 finally:
+Line 574: indent=20                     self.queue.task_done()
+Line 575: indent=8         finally:
+Line 576: indent=12             self.playing = False
+Line 577: indent=5 
+Line 578: indent=0 def run_turn(turn_num: int, mic_stream, memoria):
+Line 579: indent=4     global stop_loop
+Line 580: indent=5 
+Line 581: indent=4     print(f"\n{'='*60}")
+Line 582: indent=4     print(f"TURNO {turn_num} INICIANDO")
+Line 583: indent=4     print(f"{'='*60}")
+Line 584: indent=5 
+Line 585: indent=4     turn_start = time.perf_counter()

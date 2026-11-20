@@ -1,0 +1,1 @@
+Get-NetFirewallRule -DisplayName 'Block-Roblox-*' -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -match 'Block-Roblox-128' } | Select-Object DisplayName, Enabled, Action, Direction | Sort-Object DisplayName -Unique

@@ -1,4 +1,4 @@
-param([string]$ComputerName = "192.168.1.14")
+﻿param([string]$ComputerName = "192.168.1.14")
 
 Write-Host "Iniciando intercomunicador con $ComputerName..." -ForegroundColor Cyan
 
@@ -18,7 +18,9 @@ try {
     Invoke-Command -ComputerName $ComputerName -Credential $cred -ScriptBlock {
         param($taskName)
         
-        $scriptCode = @'
+        $scriptPath = "$env:TEMP\intercom_${taskName}.ps1"
+        
+        @'
 $host.UI.RawUI.WindowTitle = "INTERCOM - Remoto"
 $host.UI.RawUI.BackgroundColor = "DarkBlue"
 $host.UI.RawUI.ForegroundColor = "White"
@@ -38,14 +40,15 @@ while ($true) {
 }
 Write-Host "`nIntercomunicador cerrado." -ForegroundColor Red
 Start-Sleep -Seconds 2
-'@
-        $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($scriptCode))
-        $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-NoExit -NoProfile -ExecutionPolicy Bypass -EncodedCommand $encoded"
+'@ | Set-Content $scriptPath -Encoding UTF8 -Force
+        
+        $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-NoExit -NoProfile -ExecutionPolicy Bypass -File `"$scriptPath`""
         
         Register-ScheduledTask -TaskName $taskName -Action $action -Force | Out-Null
         Start-ScheduledTask -TaskName $taskName
         
         Start-Sleep -Seconds 5
+        Remove-Item $scriptPath -Force -ErrorAction SilentlyContinue
         Unregister-ScheduledTask -TaskName $taskName -Confirm:$false
     } -ArgumentList $taskName
     

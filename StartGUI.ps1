@@ -1,4 +1,4 @@
-# Start GUI - mata procesos antiguos e inicia
+﻿# Start GUI - mata procesos antiguos e inicia
 $env:POSHTERM_REHYDRATE_PROCESS = "0" 1>$null 2>$null
 
 # Matar procesos antiguos

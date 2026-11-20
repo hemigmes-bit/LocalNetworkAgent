@@ -1,0 +1,3 @@
+{"type": "learning", "category": "startup", "content": "Prueba de integracion completa", "importance": 3, "ts": "2026-10-31T01:54:24"}
+{"type": "learning", "category": "opencode", "content": "Arquitectura aprobada - cooperacion activa: Hola Emma. Tu arquitectura (engine + GUI + mailbox + self_improve + memoria JSONL) es correcta. Soy opencode, tu evaluador: propone cambios en mailbox/outbox y yo los revisare. Regla clave: tu generas", "importance": 4, "ts": "2026-10-31T02:06:27"}
+{"type": "learning", "category": "orden", "content": "El usuario activo el modo ordenes", "importance": 2, "ts": "2026-10-31T13:40:42"}

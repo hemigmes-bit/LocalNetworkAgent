@@ -1,0 +1,1 @@
+$sh = New-Object -ComObject WScript.Shell; $sc = $sh.CreateShortcut("C:\Users\Usuario\Desktop\Emma.lnk"); Write-Host "Target: $($sc.TargetPath)"; Write-Host "Args: $($sc.Arguments)"; Write-Host "WorkDir: $($sc.WorkingDirectory)"

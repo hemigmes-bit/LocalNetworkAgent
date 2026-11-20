@@ -1,4 +1,4 @@
-# Script para configurar WoL en CORE0 remotamente
+﻿# Script para configurar WoL en CORE0 remotamente
 # Usa WMI para configurar el adaptador de red
 
 $CORE0_IP = "192.168.1.13"

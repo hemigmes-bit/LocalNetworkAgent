@@ -1,0 +1,1 @@
+Get-NetFirewallRule -DisplayName 'Block-YouTube-*' | Select-Object DisplayName, Priority | Sort-Object Priority

@@ -1,4 +1,4 @@
-$ws = New-Object -ComObject WScript.Shell
+﻿$ws = New-Object -ComObject WScript.Shell
 $shortcut = $ws.CreateShortcut("$env:USERPROFILE\Desktop\LocalNetworkAgent.lnk")
 $shortcut.TargetPath = "powershell.exe"
 $shortcut.Arguments = "-WindowStyle Hidden -NoProfile -ExecutionPolicy Bypass -File `"C:\Users\Usuario\LocalNetworkAgent\LocalNetworkAgent-GUI.ps1`""

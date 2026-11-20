@@ -1,4 +1,4 @@
-param([switch]$Minimized = $false)
+﻿param([switch]$Minimized = $false)
 
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 Add-Type -AssemblyName System.Windows.Forms
@@ -20,19 +20,21 @@ $form.Size = New-Object System.Drawing.Size(1300, 800)
 $form.StartPosition = "CenterScreen"
 $form.FormBorderStyle = "Sizable"
 $form.MinimumSize = New-Object System.Drawing.Size(1100, 700)
-$form.BackColor = [System.Drawing.Color]::FromArgb(10, 10, 20)
+$form.Font = New-Object System.Drawing.Font("Tahoma", 8.25)
+$form.BackColor = [System.Drawing.SystemColors]::Control
 
-$neonCyan = [System.Drawing.Color]::FromArgb(0, 230, 200)
-$neonMagenta = [System.Drawing.Color]::FromArgb(230, 0, 200)
-$neonGreen = [System.Drawing.Color]::FromArgb(0, 230, 120)
-$neonOrange = [System.Drawing.Color]::FromArgb(255, 160, 50)
-$neonBlue = [System.Drawing.Color]::FromArgb(50, 150, 255)
-$darkest = [System.Drawing.Color]::FromArgb(8, 8, 20)
-$dark = [System.Drawing.Color]::FromArgb(15, 15, 32)
-$medium = [System.Drawing.Color]::FromArgb(22, 22, 42)
-$light = [System.Drawing.Color]::FromArgb(35, 35, 55)
-$textDim = [System.Drawing.Color]::FromArgb(140, 140, 160)
-$textBright = [System.Drawing.Color]::FromArgb(220, 220, 240)
+$neonCyan    = [System.Drawing.Color]::FromArgb(0, 0, 160)        # azul (títulos)
+$neonMagenta = [System.Drawing.Color]::FromArgb(0, 0, 128)        # azul oscuro
+$neonGreen   = [System.Drawing.Color]::FromArgb(0, 128, 0)        # verde (online)
+$neonOrange  = [System.Drawing.Color]::FromArgb(160, 80, 0)       # naranja oscuro
+$neonBlue    = [System.Drawing.Color]::FromArgb(0, 0, 160)        # azul
+$darkest     = [System.Drawing.SystemColors]::Control             # gris (barras)
+$dark        = [System.Drawing.SystemColors]::Control             # gris
+$medium      = [System.Drawing.SystemColors]::Control             # gris (paneles)
+$light       = [System.Drawing.SystemColors]::ControlLight        # gris claro
+$headerBg    = [System.Drawing.Color]::FromArgb(200, 210, 235)    # azul claro (cabeceras)
+$textDim     = [System.Drawing.Color]::FromArgb(96, 96, 96)       # texto atenuado
+$textBright  = [System.Drawing.Color]::Black                      # texto normal
 
 function New-CyberButton {
     param($Text, $X, $Y, $W, $H, $Color, $Action)
@@ -40,13 +42,10 @@ function New-CyberButton {
     $btn.Text = $Text
     $btn.Location = New-Object System.Drawing.Point($X, $Y)
     $btn.Size = New-Object System.Drawing.Size($W, $H)
-    $btn.FlatStyle = "Flat"
-    $btn.FlatAppearance.BorderSize = 1
-    $btn.FlatAppearance.BorderColor = $Color
-    $btn.BackColor = [System.Drawing.Color]::FromArgb(25, 25, 48)
-    $btn.ForeColor = $Color
-    $btn.Font = New-Object System.Drawing.Font("Segoe UI", 9.5, [System.Drawing.FontStyle]::Bold)
-    $btn.Cursor = [System.Windows.Forms.Cursors]::Hand
+    $btn.FlatStyle = [System.Windows.Forms.FlatStyle]::Standard
+    $btn.UseVisualStyleBackColor = $true
+    $btn.Font = New-Object System.Drawing.Font("Tahoma", 8.25)
+    $btn.Cursor = [System.Windows.Forms.Cursors]::Default
     $btn.TextAlign = "MiddleCenter"
     $btn.Add_Click($Action)
     return $btn
@@ -97,9 +96,9 @@ $form.Controls.Add($menuStrip)
 
 # ─── Header Title ────────────────────────────────────────────────────────────
 $lblTitle = New-Object System.Windows.Forms.Label
-$lblTitle.Text = "LOCAL NETWORK AGENT"
-$lblTitle.Font = New-Object System.Drawing.Font("Segoe UI", 26, [System.Drawing.FontStyle]::Bold)
-$lblTitle.ForeColor = $neonCyan
+$lblTitle.Text = "Local Network Agent"
+$lblTitle.Font = New-Object System.Drawing.Font("Tahoma", 14, [System.Drawing.FontStyle]::Bold)
+$lblTitle.ForeColor = [System.Drawing.Color]::FromArgb(0, 0, 128)
 $lblTitle.Location = New-Object System.Drawing.Point(20, 35)
 $lblTitle.AutoSize = $true
 $form.Controls.Add($lblTitle)
@@ -127,7 +126,7 @@ $form.Controls.Add($global:lblStatus)
 $sepLine = New-Object System.Windows.Forms.Panel
 $sepLine.Location = New-Object System.Drawing.Point(15, 105)
 $sepLine.Size = New-Object System.Drawing.Size(1260, 2)
-$sepLine.BackColor = [System.Drawing.Color]::FromArgb(60, 60, 80)
+$sepLine.BackColor = [System.Drawing.SystemColors]::ControlDark
 $form.Controls.Add($sepLine)
 
 # ─── Left Panel - Device List ───────────────────────────────────────────────
@@ -135,7 +134,7 @@ $leftPanel = New-Object System.Windows.Forms.Panel
 $leftPanel.Location = New-Object System.Drawing.Point(15, 115)
 $leftPanel.Size = New-Object System.Drawing.Size(350, 620)
 $leftPanel.BackColor = $medium
-$leftPanel.BorderStyle = "FixedSingle"
+$leftPanel.BorderStyle = "Fixed3D"
 $form.Controls.Add($leftPanel)
 
 $lblDevices = New-Object System.Windows.Forms.Label
@@ -149,13 +148,13 @@ $leftPanel.Controls.Add($lblDevices)
 $global:deviceList = New-Object System.Windows.Forms.ListView
 $global:deviceList.Location = New-Object System.Drawing.Point(12, 40)
 $global:deviceList.Size = New-Object System.Drawing.Size(322, 560)
-$global:deviceList.BackColor = [System.Drawing.Color]::FromArgb(5, 5, 15)
+$global:deviceList.BackColor = [System.Drawing.Color]::White
 $global:deviceList.ForeColor = $textBright
 $global:deviceList.FullRowSelect = $true
 $global:deviceList.View = "Details"
 $global:deviceList.GridLines = $false
 $global:deviceList.HideSelection = $false
-$global:deviceList.BorderStyle = "None"
+$global:deviceList.BorderStyle = "Fixed3D"
 
 $null = $global:deviceList.Columns.Add("NOMBRE", 150)
 $null = $global:deviceList.Columns.Add("IP", 90)
@@ -194,6 +193,11 @@ $ctxForce.Text = "Forzar deteccion"
 $ctxForce.Add_Click({ Force-Detect })
 $contextMenu.Items.Add($ctxForce) | Out-Null
 
+$ctxRemote = New-Object System.Windows.Forms.ToolStripMenuItem
+$ctxRemote.Text = "Acceso remoto (TV/RDP/Capture)"
+$ctxRemote.Add_Click({ Open-Monitor })
+$contextMenu.Items.Add($ctxRemote) | Out-Null
+
 $global:deviceList.ContextMenuStrip = $contextMenu
 $leftPanel.Controls.Add($global:deviceList)
 
@@ -202,14 +206,14 @@ $rightPanel = New-Object System.Windows.Forms.Panel
 $rightPanel.Location = New-Object System.Drawing.Point(380, 115)
 $rightPanel.Size = New-Object System.Drawing.Size(900, 620)
 $rightPanel.BackColor = $medium
-$rightPanel.BorderStyle = "FixedSingle"
+$rightPanel.BorderStyle = "Fixed3D"
 $form.Controls.Add($rightPanel)
 
 # ─ Info Banner ─
 $infoHeader = New-Object System.Windows.Forms.Panel
 $infoHeader.Location = New-Object System.Drawing.Point(0, 0)
 $infoHeader.Size = New-Object System.Drawing.Size(898, 30)
-$infoHeader.BackColor = [System.Drawing.Color]::FromArgb(30, 30, 55)
+$infoHeader.BackColor = $headerBg
 $rightPanel.Controls.Add($infoHeader)
 
 $lblInfoTitle = New-Object System.Windows.Forms.Label
@@ -225,9 +229,9 @@ $global:txtInfo.Location = New-Object System.Drawing.Point(15, 40)
 $global:txtInfo.Size = New-Object System.Drawing.Size(870, 260)
 $global:txtInfo.Font = New-Object System.Drawing.Font("Cascadia Code", 10)
 $global:txtInfo.ForeColor = $textDim
-$global:txtInfo.BackColor = [System.Drawing.Color]::FromArgb(5, 5, 15)
+$global:txtInfo.BackColor = [System.Drawing.Color]::White
 $global:txtInfo.ReadOnly = $true
-$global:txtInfo.BorderStyle = "None"
+$global:txtInfo.BorderStyle = "Fixed3D"
 $global:txtInfo.ScrollBars = "Vertical"
 $rightPanel.Controls.Add($global:txtInfo)
 
@@ -235,7 +239,7 @@ $rightPanel.Controls.Add($global:txtInfo)
 $actionHeader = New-Object System.Windows.Forms.Panel
 $actionHeader.Location = New-Object System.Drawing.Point(0, 310)
 $actionHeader.Size = New-Object System.Drawing.Size(898, 30)
-$actionHeader.BackColor = [System.Drawing.Color]::FromArgb(30, 30, 55)
+$actionHeader.BackColor = $headerBg
 $rightPanel.Controls.Add($actionHeader)
 
 $lblActions = New-Object System.Windows.Forms.Label
@@ -263,7 +267,7 @@ $actionPanel.Controls.Add((New-CyberButton -Text "MONITOR" -X 545 -Y 10 -W 100 -
 $apiHeader = New-Object System.Windows.Forms.Panel
 $apiHeader.Location = New-Object System.Drawing.Point(0, 415)
 $apiHeader.Size = New-Object System.Drawing.Size(898, 30)
-$apiHeader.BackColor = [System.Drawing.Color]::FromArgb(30, 30, 55)
+$apiHeader.BackColor = $headerBg
 $rightPanel.Controls.Add($apiHeader)
 
 $lblApiTitle = New-Object System.Windows.Forms.Label
@@ -295,11 +299,11 @@ $global:txtLog = New-Object System.Windows.Forms.TextBox
 $global:txtLog.Location = New-Object System.Drawing.Point(10, 55)
 $global:txtLog.Size = New-Object System.Drawing.Size(850, 95)
 $global:txtLog.Multiline = $true
-$global:txtLog.BackColor = [System.Drawing.Color]::FromArgb(3, 3, 10)
-$global:txtLog.ForeColor = $neonGreen
+$global:txtLog.BackColor = [System.Drawing.Color]::White
+$global:txtLog.ForeColor = [System.Drawing.Color]::Black
 $global:txtLog.Font = New-Object System.Drawing.Font("Cascadia Code", 9)
 $global:txtLog.ReadOnly = $true
-$global:txtLog.BorderStyle = "None"
+$global:txtLog.BorderStyle = "Fixed3D"
 $global:txtLog.ScrollBars = "Vertical"
 $apiPanel.Controls.Add($global:txtLog)
 
@@ -333,6 +337,44 @@ $global:apiProcess = $null
 $global:apiTimer = $null
 
 # ─── Functions ────────────────────────────────────────────────────────────────
+function Invoke-PingSweep {
+    param([string]$Subnet, [string[]]$ExtraIps = @())
+    $targets = New-Object System.Collections.Generic.List[string]
+    1..100 | ForEach-Object { $targets.Add("$Subnet.$_") }
+    foreach ($ip in $ExtraIps) { if ($ip) { $targets.Add($ip) } }
+    $pings = New-Object System.Collections.Generic.List[System.Net.NetworkInformation.Ping]
+    $tasks = New-Object System.Collections.Generic.List[System.Threading.Tasks.Task]
+    foreach ($ip in $targets) {
+        try {
+            $p = [System.Net.NetworkInformation.Ping]::new()
+            $pings.Add($p)
+            $tasks.Add($p.SendPingAsync($ip, 60))
+        } catch {}
+    }
+    if ($tasks.Count -gt 0) {
+        try { [System.Threading.Tasks.Task]::WaitAll($tasks.ToArray(), 5000) } catch {}
+    }
+    foreach ($p in $pings) { try { $p.Dispose() } catch {} }
+}
+
+function Get-RouterIP {
+    $router = $global:config.Computers | Where-Object { $_.Name -match 'router' } | Select-Object -First 1
+    if ($router -and $router.IP) { return $router.IP }
+    try {
+        $gw = (Get-NetRoute -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue | Select-Object -First 1).NextHop
+        if ($gw) { return $gw }
+    } catch {}
+    return "$($global:config.SubnetPrefix).1"
+}
+
+function Test-IsLocalIP {
+    param([string]$Ip)
+    $local = @(Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+        Where-Object { $_.IPAddress -ne '127.0.0.1' } |
+        Select-Object -ExpandProperty IPAddress)
+    return ($local -contains $Ip)
+}
+
 function Start-NetworkScan {
     if ($global:scanning) { return }
     $global:scanning = $true
@@ -348,18 +390,19 @@ function Start-NetworkScan {
     
     $subnet = $global:config.SubnetPrefix
     
-    # STEP 1: Ping ALL 30 IPs to force ARP table refresh
+    # STEP 1: Ping sweep to refresh ARP (1..100 fast, then sparse beyond)
     $global:lblStatus.Text = "[ Ping sweep... ]"
     [System.Windows.Forms.Application]::DoEvents()
-    1..30 | ForEach-Object {
-        try { [System.Net.NetworkInformation.Ping]::new().Send("$subnet.$_", 80) | Out-Null } catch {}
+    $extraIps = $global:config.Computers | Where-Object { $_.IP } | ForEach-Object {
+        $ipParts = $_.IP -split '\.'
+        if ([int]$ipParts[3] -gt 100) { $_.IP }
     }
+    Invoke-PingSweep -Subnet $subnet -ExtraIps $extraIps
     
-    # STEP 2: Read fresh ARP table
+    # STEP 2: Read all ARP entries (any state)
     $arpTable = Get-NetNeighbor | Where-Object {
         $_.IPAddress -match "^$([regex]::Escape($subnet))\." -and
-        $_.LinkLayerAddress -and $_.LinkLayerAddress -ne "00-00-00-00-00-00" -and
-        $_.State -eq "Reachable"
+        $_.LinkLayerAddress -and $_.LinkLayerAddress -ne "00-00-00-00-00-00" -and $_.LinkLayerAddress -ne "FF-FF-FF-FF-FF-FF"
     }
     
     $macToIp = @{}
@@ -368,9 +411,10 @@ function Start-NetworkScan {
         $macToIp[$mac] = $entry.IPAddress
     }
     
-    # STEP 3: Check each device
+    # STEP 3: Check each configured device
     $changed = $false
     $online = 0; $offline = 0
+    $seenIps = @{}  # track which IPs already shown
     
     foreach ($pc in $global:config.Computers) {
         $name = $pc.Name; $cfgIp = $pc.IP; $isPhone = ($pc.Type -eq "phone")
@@ -378,6 +422,10 @@ function Start-NetworkScan {
         
         # Resolve actual IP: MAC → ARP → fallback
         $actualIp = $null
+        if ($name -match "^$([regex]::Escape($env:COMPUTERNAME))" -or (Test-IsLocalIP $cfgIp)) {
+            $localIp = (Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object { $_.IPAddress -match "^$([regex]::Escape($subnet))\." } | Select-Object -First 1).IPAddress
+            if ($localIp) { $actualIp = $localIp }
+        }
         if ($pcMac -and $macToIp.ContainsKey($pcMac)) { $actualIp = $macToIp[$pcMac] }
         if (-not $actualIp -and $name -eq "CORE0") {
             $cm = ($global:config.Core0MAC -replace "-", ":").ToLower()
@@ -398,7 +446,11 @@ function Start-NetworkScan {
         
         # Online check: ping + TCP fallback
         $isOnline = $false; $viaTcp = $false
-        try { $r = [System.Net.NetworkInformation.Ping]::new().Send($actualIp, 300); if ($r.Status -eq "Success") { $isOnline = $true } } catch {}
+        if ($name -match "^$([regex]::Escape($env:COMPUTERNAME))" -or (Test-IsLocalIP $actualIp)) {
+            $isOnline = $true
+        } else {
+            try { $r = [System.Net.NetworkInformation.Ping]::new().Send($actualIp, 150); if ($r.Status -eq "Success") { $isOnline = $true } } catch {}
+        }
         [System.Windows.Forms.Application]::DoEvents()
         
         if (-not $isOnline) {
@@ -415,7 +467,7 @@ function Start-NetworkScan {
         # Render
         $st = if ($isOnline) { "Conectado" } else { "Offline" }
         if ($isOnline) {
-            $clr = if ($viaTcp) { [System.Drawing.Color]::FromArgb(100, 200, 255) } else { $neonGreen }
+            $clr = if ($viaTcp) { [System.Drawing.Color]::FromArgb(0, 0, 200) } else { $neonGreen }
         } else { $clr = [System.Drawing.Color]::FromArgb(120, 120, 140) }
         
         $it = New-Object System.Windows.Forms.ListViewItem($name)
@@ -424,7 +476,38 @@ function Start-NetworkScan {
         $it.Tag = @{ IP = $actualIp; Host = $name; Status = $st; Phone = $isPhone }
         $it.ForeColor = $clr
         $global:deviceList.Items.Add($it) | Out-Null
+        $seenIps[$actualIp] = $true
         if ($isOnline) { $online++ } else { $offline++ }
+    }
+    
+    # STEP 4: Show unknown devices found in ARP (not in config)
+    $unknownColor = [System.Drawing.Color]::FromArgb(128, 128, 0)
+    foreach ($entry in $arpTable) {
+        $ip = $entry.IPAddress
+        if ($seenIps.ContainsKey($ip)) { continue }
+        $seenIps[$ip] = $true
+        
+        # DNS resolution for hostname
+        $devName = $ip
+        try {
+            $dnsEntry = [System.Net.Dns]::GetHostEntry($ip)
+            if ($dnsEntry.HostName -and $dnsEntry.HostName -ne $ip) { $devName = $dnsEntry.HostName }
+        } catch {}
+        
+        # Quick online check
+        $isOnline = $false
+        try { $r = [System.Net.NetworkInformation.Ping]::new().Send($ip, 200); if ($r.Status -eq "Success") { $isOnline = $true } } catch {}
+        if (-not $isOnline) { try { $t = New-Object System.Net.Sockets.TcpClient; $c = $t.BeginConnect($ip, 445, $null, $null); if ($c.AsyncWaitHandle.WaitOne(200)) { $isOnline = $true; $t.EndConnect($c) }; $t.Close() } catch {} }
+        
+        $st = if ($isOnline) { "Conectado" } else { "Offline" }
+        $it = New-Object System.Windows.Forms.ListViewItem($devName)
+        $it.SubItems.Add($ip) | Out-Null
+        $it.SubItems.Add($st) | Out-Null
+        $it.Tag = @{ IP = $ip; Host = $devName; Status = $st; Phone = $false }
+        $it.ForeColor = $unknownColor
+        $global:deviceList.Items.Add($it) | Out-Null
+        if ($isOnline) { $online++ } else { $offline++ }
+        [System.Windows.Forms.Application]::DoEvents()
     }
     
     # Save config if IPs changed (already updated in-memory above)
@@ -439,6 +522,45 @@ function Start-NetworkScan {
     $global:scanning = $false
 }
 
+# ─── Resolve device IP by MAC before any action ─────────────────────────────
+function Resolve-DeviceIP {
+    param($device)
+    $hostname = $device.Host
+    $currentIp = $device.IP
+    if ($currentIp -eq (Get-RouterIP) -or (Test-IsLocalIP $currentIp)) { return $currentIp }
+    
+    # Get MAC for this device
+    $pcCfg = $global:config.Computers | Where-Object { $_.Name -eq $hostname }
+    $devMac = $null
+    if ($pcCfg -and $pcCfg.MAC) { $devMac = $pcCfg.MAC.ToLower() }
+    if (-not $devMac -and $hostname -eq "CORE0") { $devMac = ($global:config.Core0MAC -replace "-", ":").ToLower() }
+    if (-not $devMac) { return $currentIp }
+    
+    # Quick ping sweep to refresh ARP (parallel)
+    $subnet = $global:config.SubnetPrefix
+    Invoke-PingSweep -Subnet $subnet
+    
+    # Look up MAC in ARP
+    $arpEntry = Get-NetNeighbor | Where-Object {
+        $_.IPAddress -match "^$([regex]::Escape($subnet))\." -and
+        ($_.LinkLayerAddress.ToLower() -replace "-", ":") -eq $devMac -and
+        $_.LinkLayerAddress -ne "00-00-00-00-00-00"
+    }
+    
+    if ($arpEntry) {
+        $realIp = $arpEntry[0].IPAddress
+        if ($realIp -ne $currentIp) {
+            # Auto-update config silently
+            if ($pcCfg) { $pcCfg.IP = $realIp }
+            $global:config | ConvertTo-Json -Depth 10 | Set-Content $configPath -Encoding UTF8
+            $global:config = Get-Content $configPath -Raw | ConvertFrom-Json
+            $global:lblStatus.Text = "[ $hostname → $realIp ]"
+        }
+        return $realIp
+    }
+    return $currentIp
+}
+
 # ─── Force detection for a single device ─────────────────────────────────────
 function Force-Detect {
     if (-not $global:selectedDevice) { [System.Windows.Forms.MessageBox]::Show("Seleccione un dispositivo"); return }
@@ -446,10 +568,9 @@ function Force-Detect {
     $ip = $global:selectedDevice.IP
     [System.Windows.Forms.Application]::DoEvents()
     
-    # Ping sweep to refresh ARP
+    # Ping sweep to refresh ARP (parallel)
     $subnet = $global:config.SubnetPrefix
-    1..30 | ForEach-Object { try { [System.Net.NetworkInformation.Ping]::new().Send("$subnet.$_", 80) | Out-Null } catch {} }
-    [System.Windows.Forms.Application]::DoEvents()
+    Invoke-PingSweep -Subnet $subnet
     
     # Search for this device's MAC in ARP
     $foundIp = $null
@@ -536,7 +657,7 @@ function Show-DeviceInfo {
     $info += "|  [3] Wake-on-LAN" + (" " * 37) + " |`n"
     $info += "|  [4] Voz remota" + (" " * 38) + " |`n"
     $info += "|  [5] Chat en tiempo real" + (" " * 29) + " |`n"
-    $info += "|  [6] Monitor remoto" + (" " * 35) + " |`n"
+    $info += "|  [6] Acceso remoto (TV/RDP/Capture)" + (" " * 21) + " |`n"
     if ($status -eq "Offline") {
         $info += "|" + (" " * 50) + "|`n"
         $info += "|  [!] Offline? Prueba: Forzar deteccion (click derecho)" + " |`n"
@@ -548,29 +669,54 @@ function Show-DeviceInfo {
 
 function Open-Files {
     if (-not $global:selectedDevice) { [System.Windows.Forms.MessageBox]::Show("Seleccione un dispositivo"); return }
-    $ip = $global:selectedDevice.IP
+    $ip = Resolve-DeviceIP $global:selectedDevice
     $name = $global:selectedDevice.Host
     $isPhone = $global:selectedDevice.Phone
     
-    # Router: abrir admin web (HTTPS) donde se gestiona el USB
-    if ($ip -eq "192.168.1.1" -or $name -like "*livebox*") {
-        Start-Process "https://192.168.1.1"
+    # Router: abrir admin web (HTTP)
+    if ($ip -eq (Get-RouterIP)) {
+        Start-Process "http://$ip"
         return
     }
     
-    # Phone: no hay explorador de archivos remoto
+    # Phone: usar ADB Explorer
     if ($isPhone) {
-        [System.Windows.Forms.MessageBox]::Show("No hay explorador remoto disponible para dispositivos moviles")
+        $adb = "$env:LOCALAPPDATA\AndroidPlatformTools\platform-tools\adb.exe"
+        if (-not (Test-Path $adb)) {
+            [System.Windows.Forms.MessageBox]::Show("ADB no encontrado en $adb`nInstale platform-tools", "ADB no disponible")
+            return
+        }
+        Start-Process powershell.exe -WindowStyle Normal -ArgumentList "-NoExit", "-ExecutionPolicy", "Bypass", "-File", "$projectPath\ADB-Explorer.ps1", "-IP", $ip, "-ADB", $adb
         return
     }
     
-    Start-Process powershell.exe -ArgumentList "-WindowStyle Hidden -NoExit -ExecutionPolicy Bypass -File `"$projectPath\Explorer_Agent.ps1`" -ComputerName $ip" -WindowStyle Hidden
+    Start-Process powershell.exe -WindowStyle Hidden -ArgumentList "-NoExit -ExecutionPolicy Bypass -File `"$projectPath\Explorer_Agent.ps1`" -ComputerName $ip"
 }
 
 function Open-Shell {
     if (-not $global:selectedDevice) { [System.Windows.Forms.MessageBox]::Show("Seleccione un dispositivo"); return }
-    $ip = $global:selectedDevice.IP
-    if ($ip -eq "192.168.1.14") { [System.Windows.Forms.MessageBox]::Show("Use PowerShell directo"); return }
+    $ip = Resolve-DeviceIP $global:selectedDevice
+    if (Test-IsLocalIP $ip) { [System.Windows.Forms.MessageBox]::Show("Use PowerShell directo"); return }
+    
+    $isPhone = $global:selectedDevice.Phone
+    if ($isPhone) {
+        $adb = "$env:LOCALAPPDATA\AndroidPlatformTools\platform-tools\adb.exe"
+        if (-not (Test-Path $adb)) {
+            [System.Windows.Forms.MessageBox]::Show("ADB no encontrado en $adb`nInstale platform-tools", "ADB no disponible")
+            return
+        }
+        $scriptPath = "$env:TEMP\adb_shell_$PID.ps1"
+        $content = @"
+`$adb = "$adb"
+`$ip = "$ip"
+& `$adb connect `$ip 2>`$null
+Write-Host "=== ADB Shell (`$ip) ===" -ForegroundColor Cyan
+& `$adb -s `$ip shell
+"@
+        [System.IO.File]::WriteAllText($scriptPath, $content, [System.Text.Encoding]::UTF8)
+        Start-Process powershell.exe -WindowStyle Normal -ArgumentList "-NoExit", "-ExecutionPolicy", "Bypass", "-File", $scriptPath
+        return
+    }
     
     $credFile = "$projectPath\core0-cred.xml"
     if (Test-Path $credFile) {
@@ -583,33 +729,44 @@ function Open-Shell {
 
 function Send-WoL {
     if (-not $global:selectedDevice) { [System.Windows.Forms.MessageBox]::Show("Seleccione un dispositivo"); return }
-    $mac = (Get-Content "$projectPath\network-config.json" | ConvertFrom-Json).Core0MAC
-    Start-Process powershell.exe -ArgumentList "-WindowStyle Hidden -ExecutionPolicy Bypass -Command `"Import-Module '$projectPath\NetworkUtilsPublic.psm1'; Send-WakeOnLan -MACAddress '$mac'`"" -WindowStyle Hidden
+    $mac = $global:config.Core0MAC
+    Start-Process powershell.exe -WindowStyle Hidden -ArgumentList "-ExecutionPolicy Bypass -Command `"Import-Module '$projectPath\NetworkUtilsPublic.psm1'; Send-WakeOnLan -MACAddress '$mac'`""
     [System.Windows.Forms.MessageBox]::Show("WoL enviado", "WOL")
 }
 
 function Open-Voice {
     if (-not $global:selectedDevice) { [System.Windows.Forms.MessageBox]::Show("Seleccione un dispositivo"); return }
-    Start-Process powershell.exe -ArgumentList "-WindowStyle Hidden -ExecutionPolicy Bypass -NoExit -File `"$projectPath\Speak-Remote.ps1`" -ComputerName $($global:selectedDevice.IP)" -WindowStyle Hidden
+    $ip = Resolve-DeviceIP $global:selectedDevice
+    Start-Process powershell.exe -WindowStyle Hidden -ArgumentList "-ExecutionPolicy Bypass -NoExit -File `"$projectPath\Speak-Remote.ps1`" -ComputerName $ip"
 }
 
 function Open-Intercom {
     if (-not $global:selectedDevice) { [System.Windows.Forms.MessageBox]::Show("Seleccione un dispositivo"); return }
-    Start-Process powershell.exe -ArgumentList "-WindowStyle Hidden -ExecutionPolicy Bypass -NoExit -File `"$projectPath\Intercom.ps1`" -ComputerName $($global:selectedDevice.IP)" -WindowStyle Hidden
+    $ip = Resolve-DeviceIP $global:selectedDevice
+    Start-Process powershell.exe -WindowStyle Hidden -ArgumentList "-ExecutionPolicy Bypass -NoExit -File `"$projectPath\Intercom.ps1`" -ComputerName $ip"
 }
 
 function Open-Monitor {
     if (-not $global:selectedDevice) { [System.Windows.Forms.MessageBox]::Show("Seleccione un dispositivo"); return }
-    $ip = $global:selectedDevice.IP
-    if ($ip -eq "192.168.1.14") { [System.Windows.Forms.MessageBox]::Show("No soportado en local"); return }
-    Start-Process powershell.exe -ArgumentList "-WindowStyle Hidden -ExecutionPolicy Bypass -NoExit -File `"$projectPath\RemoteMonitor.ps1`" -ComputerName $ip" -WindowStyle Hidden
+    $ip = Resolve-DeviceIP $global:selectedDevice
+        if (Test-IsLocalIP $ip) { [System.Windows.Forms.MessageBox]::Show("No soportado en local"); return }
+    $isPhone = $global:selectedDevice.Phone
+    if ($isPhone) {
+        $tvExe = "C:\Program Files\TeamViewer\TeamViewer.exe"
+        if (-not (Test-Path $tvExe)) { $tvExe = "C:\Program Files (x86)\TeamViewer\TeamViewer.exe" }
+        if (Test-Path $tvExe) {
+            $result = [System.Windows.Forms.MessageBox]::Show("TeamViewer detectado localmente.`nSeleccionar metodo al conectar.", "Acceso Remoto", "OKCancel")
+            if ($result -eq "Cancel") { return }
+        }
+    }
+    Start-Process powershell.exe -ArgumentList "-ExecutionPolicy Bypass -NoExit -File `"$projectPath\RemoteMonitor.ps1`" -ComputerName $ip" -WindowStyle Normal
 }
 
 function Toggle-Api {
     if ($global:apiProcess -eq $null) {
-        $global:apiProcess = Start-Process powershell.exe -ArgumentList "-WindowStyle Hidden -ExecutionPolicy Bypass -File `"$projectPath\API-Server.ps1`"" -WindowStyle Hidden -PassThru -RedirectStandardOutput "$projectPath\temp_api.log"
+        $global:apiProcess = Start-Process powershell.exe -WindowStyle Hidden -ArgumentList "-ExecutionPolicy Bypass -File `"$projectPath\API-Server.ps1`"" -PassThru -RedirectStandardOutput "$projectPath\temp_api.log"
         $global:btnApi.Text = "DETENER"
-        $global:btnApi.FlatAppearance.BorderColor = [System.Drawing.Color]::FromArgb(255, 80, 80)
+        $global:btnApi.ForeColor = [System.Drawing.Color]::FromArgb(180, 0, 0)
         $global:lblApiStatus.Text = "Ejecutando"
         $global:lblApiStatus.ForeColor = $neonGreen
         
@@ -624,7 +781,7 @@ function Toggle-Api {
                 }
                 if ($global:apiProcess -ne $null -and $global:apiProcess.HasExited) {
                     $global:btnApi.Text = "INICIAR"
-                    $global:btnApi.FlatAppearance.BorderColor = [System.Drawing.Color]::FromArgb(0, 180, 255)
+                    $global:btnApi.ForeColor = [System.Drawing.Color]::Black
                     $global:lblApiStatus.Text = "Detenido"
                     $global:lblApiStatus.ForeColor = [System.Drawing.Color]::Gray
                     $global:apiProcess = $null
@@ -641,15 +798,22 @@ function Toggle-Api {
         if ($global:apiTimer) { try { $global:apiTimer.Stop(); $global:apiTimer.Dispose() } catch {} }
         $global:apiTimer = $null
         $global:btnApi.Text = "INICIAR"
-        $global:btnApi.FlatAppearance.BorderColor = [System.Drawing.Color]::FromArgb(0, 180, 255)
+        $global:btnApi.ForeColor = [System.Drawing.Color]::Black
         $global:lblApiStatus.Text = "Detenido"
         $global:lblApiStatus.ForeColor = [System.Drawing.Color]::Gray
     }
 }
 
 $form.Add_Shown({
-    try { Toggle-Api } catch {}
-    try { Start-NetworkScan } catch {}
+    $startTimer = New-Object System.Windows.Forms.Timer
+    $startTimer.Interval = 300
+    $startTimer.Add_Tick({
+        $this.Stop()
+        $this.Dispose()
+        try { Toggle-Api } catch {}
+        try { Start-NetworkScan } catch {}
+    })
+    $startTimer.Start()
 })
 
 if ($Minimized) {
@@ -659,5 +823,24 @@ if ($Minimized) {
 try {
     [System.Windows.Forms.Application]::Run($form)
 } finally {
-    Get-Process powershell* -EA SilentlyContinue | Where-Object { $_.Id -ne $PID } | Stop-Process -Force -EA SilentlyContinue
+    # Limpieza al cerrar: matar SOLO procesos hijos de esta GUI
+    # (los lanzados con -File "...LocalNetworkAgent\*.ps1" o desde $projectPath),
+    # nunca otras ventanas PowerShell del usuario.
+    try {
+        $mypid = $PID
+        Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" -ErrorAction SilentlyContinue |
+            Where-Object {
+                $_.ProcessId -ne $mypid -and
+                $_.CommandLine -and
+                $_.CommandLine -match [regex]::Escape($projectPath)
+            } |
+            ForEach-Object {
+                Write-Host "Cerrando proceso residual PID $($_.ProcessId)..."
+                Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+            }
+    } catch {}
+
+    if ($global:apiProcess -ne $null) {
+        try { if (-not $global:apiProcess.HasExited) { $global:apiProcess.Kill() } } catch {}
+    }
 }

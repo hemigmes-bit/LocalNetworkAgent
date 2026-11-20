@@ -1,4 +1,19 @@
 # LocalNetworkAgent
+## REGLA CRÍTICA: VICTORYMAR es ESTA máquina (local)
+- El hostname de esta máquina es **VICTORYMAR** (`$env:COMPUTERNAME` = VICTORYMAR)
+- **VICTORYMAR NO es un dispositivo remoto** — nunca hacer ping/RDP/WinRM contra ella para comprobar si está "offline"
+- Para su estado (disco, CPU, RAM, uptime), ejecutar los comandos **localmente** en esta máquina:
+  - Disco: `Get-CimInstance Win32_LogicalDisk -Filter "DriveType=3"`
+  - CPU/RAM: `Get-CimInstance Win32_ComputerSystem` / `Win32_OperatingSystem`
+  - IP local: `Get-NetIPAddress -AddressFamily IPv4 | Where-Object { $_.IPAddress -like "192.168.*" }`
+- La entrada `VICTORYMAR` de `network-config.json` tiene `"Local": true` — su IP puede cambiar por DHCP; verificar con `Get-NetIPAddress` antes de confiar en ella
+## REGLA CRÍTICA: Apagado de VICTORYMAR (máquina local) SOLO con confirmación explícita del usuario
+- **VICTORYMAR es el servidor del bot de Telegram** — si se apaga, el bot muere y el usuario pierde el control remoto
+- **PERMITIDO ejecutar `shutdown`, `Stop-Computer`, `Restart-Computer` sobre VICTORYMAR** SOLO con confirmación explícita del usuario (frase: `CONFIRMO APAGAR VICTORYMAR`)
+- Si el usuario pide "apaga Victorymar" sin esa frase exacta → **pedir confirmación** y NO ejecutar nada
+- **NUNCA encadenar** `shutdown /a` + `shutdown /s` ni reintentar apagados repetidos
+- Apagar OTROS dispositivos (CORE0 vía WinRM, TV Samsung, etc.) sí está permitido
+- CORE0 se apaga con: `Invoke-Command -ComputerName <IP CORE0> -Credential (Import-Clixml core0-cred.xml) -ScriptBlock { shutdown.exe /s /t 0 /f }`
 ## Ejecutar
 ```powershell
 powershell -ExecutionPolicy Bypass -File "C:\Users\Usuario\LocalNetworkAgent\LocalNetworkAgent-GUI.ps1"
@@ -30,16 +45,20 @@ O hacer doble clic en `Iniciar.bat`
   - HACERLO SIN PREGUNTAR ni pedir permiso
 - **CERRAR PROCESOS PROBLEMÁTICOS**: Si hay procesos que bloquean la ejecución (PowerShell, wscript, etc.), cerrarlos ANTES de iniciar nuevos — NUNCA pedir al usuario que lo haga.
 - **VERIFICAR ANTES DE LANZAR**: Comprobar procesos activos antes de lanzar GUI u otros scripts — NUNCA pedir al usuario que lo haga.
-## REGLA CRÍTICA: Imágenes del usuario
-- **SIEMPRE usar `clipboard-vision_analyze_clipboard`** cuando el usuario envíe una imagen, screenshot o diga "mira esto"
-- **NUNCA responder "no puedo ver imágenes"** — usar la herramienta del portapapeles primero
-- Herramientas disponibles:
-  - `clipboard_vision_analyze_clipboard` — análisis general de imagen
-  - `clipboard_vision_diagnose_error_from_clipboard` — diagnosticar errores
-  - `clipboard_vision_extract_text_from_clipboard` — extraer texto (OCR)
-  - `clipboard_vision_code_from_clipboard` — extraer código
-  - `clipboard_vision_describe_ui_from_clipboard` — describir interfaz
-- Si la imagen viene como archivo, usar las versiones con `_path`: `_analyze_image`, `_extract_text`, etc.
+## REGLA CRÍTICA: Imágenes del usuario (AUTOMÁTICO — no esperar instrucción)
+- **SIEMPRE que el usuario envíe/cuelgue/suba una imagen** (clipboard O file path O screenshot) usar `clipboard-vision` INMEDIATAMENTE
+- **NUNCA usar markitdown** para imágenes — markitdown no soporta imágenes
+- **NUNCA responder "no puedo ver imágenes"** — usar clipboard-vision siempre
+- Si la imagen viene COMO ARCHIVO (path): usar versiones `_path` (ej: `clipboard-vision_analyze_image`, `clipboard-vision_extract_text`, `clipboard-vision_code_from_screenshot`, `clipboard-vision_describe_ui`)
+- Si la imagen viene POR CLIPBOARD (sin path): usar versiones `_from_clipboard` (ej: `clipboard-vision_analyze_clipboard`, `clipboard-vision_extract_text_from_clipboard`)
+- Herramientas disponibles para archivos:
+  - `clipboard-vision_analyze_image` — análisis general
+  - `clipboard-vision_diagnose_error` — diagnosticar errores
+  - `clipboard-vision_extract_text` — extraer texto (OCR)
+  - `clipboard-vision_code_from_screenshot` — extraer código
+  - `clipboard-vision_describe_ui` — describir interfaz
+  - `clipboard-vision_understand_diagram` — interpretar diagramas
+  - `clipboard-vision_analyze_chart` — analizar gráficos
 ## Archivos protegidos (NUNCA borrar)
 - `LocalNetworkAgent-GUI.ps1` — GUI principal
 - `Iniciar.bat` — Entry point, referencia a la GUI
@@ -108,6 +127,17 @@ Antes de tocar cualquier código cuando el usuario reporta un fallo, ejecutar SI
 - **GUI siempre con `-WindowStyle Hidden`** para no mostrar consola
 - SHELL es la única excepción (debe mostrar ventana interactiva)
 - API, WOL, VOICE, CHAT, MONITOR siempre con `-WindowStyle Hidden`
+
+### Edición de código WinForms (ADB-Explorer)
+1. **NUNCA usar emoji Unicode en código .ps1**: los emojis (📁 🖼 🎬 📦 etc.) se convierten en "??" al parsearse y rompen la UI. Usar text labels como `[DIR]`, `[IMG]`, `[VID]` en su lugar.
+2. **Verificar TODA la línea editada**: antes de guardar un `edit`, releer el bloque completo. Un typo como `$list.SelectedItems.Item]` (corchete mal cerrado) rompe el script.
+3. **`Start-Process` NO tiene `-ExecutionPolicy`**: ese parámetro es de `powershell.exe` y debe ir DENTRO de `-ArgumentList`. Ejemplo correcto: `Start-Process powershell.exe -WindowStyle Hidden -ArgumentList "-ExecutionPolicy", "Bypass", "-File", "ruta.ps1"`.
+4. **Verificar con parser tras cada edición grande**: después de reescribir un script completo, ejecutar `[Language.Parser]::ParseFile(...)` para detectar errores de sintaxis antes de lanzarlo.
+
+### Configuración de OpenCode (opencode.json)
+1. **NUNCA sobrescribir `opencode.json` sin leerlo primero** — siempre leer el archivo completo antes de editarlo
+2. **Preservar configuraciones existentes** — si el archivo ya tiene providers, MCP servers u otras settings, mantenerlas al añadir nuevas
+3. **Verificar tras editar** — releer el archivo editado para confirmar que todas las secciones están intactas
 
 ### Livebox / Router
 - Livebox 6 solo usa SMBv1 (deshabilitado en Windows por seguridad)

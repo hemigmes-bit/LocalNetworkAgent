@@ -1,0 +1,32 @@
+{
+  "provider": "ollama",
+  "model": "qwen2.5-coder:7b",
+  "temperature": 0.6,
+  "student_name": "Usuario",
+  "level": "B1",
+  "native_language": "Spanish",
+  "max_corrections_per_turn": 1,
+  "voice": true,
+  "stt_model": "small",
+  "stt_language": null,
+  "stt_languages": ["es", "en"],
+  "tts_provider": "kokoro",
+  "tts_voice": "af_heart",
+  "tts_speed": 1.0,
+  "voice_auto": true,
+  "tts_edge_voice": "en-US-AvaMultilingualNeural",
+  "tts_rate": "+40%",
+  "tts_pitch": "+10Hz",
+  "tts_model": "canopylabs/orpheus-v1-english",
+  "tts_groq_voice": "hannah",
+  "tts_es_voice": "es-ES-XimenaNeural",
+  "tts_kokoro_es_voice": "ef_dora",
+  "tts_speed_es": 1.0,
+  "tts_rate_es": "+40%",
+  "voice_max_seconds": 20,
+  "level_progression": true,
+  "auto_level_up": true
+}
+
+
+
