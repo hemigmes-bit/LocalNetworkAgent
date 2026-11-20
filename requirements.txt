@@ -1,44 +1,30 @@
-# Emma Bilingue - Versiones FIJADAS (Sesion 1 compatible)
-# Ejecutar: pip install -r requirements.txt
-# Esto evita que un pip install accidental traiga torch incompatible
+# Emma Bilingüe - Voice Loop
+# Dependencias principales
 
-# ===== CRITICO: torch (RTX 5060 CUDA 12.8) =====
-# Version especifica que funciona con tu GPU. 
-# NUNCA actualizar torch sin antes verificar compatibilidad CUDA.
-torch==2.11.0+cu128
-torchvision
-torchaudio
+# STT
+faster-whisper>=1.1.0
+silero-vad>=5.1.0
 
-# ===== STT (Voice Loop) =====
-faster-whisper==1.2.1
-ctranslate2==4.8.4
+# TTS
+kokoro-onnx>=0.3.0
 
-# ===== TTS (Kokoro) =====
-kokoro-onnx==0.6.1
+# Audio
+sounddevice>=0.4.6
+numpy>=1.26.0
 
-# ===== VAD (Silero) =====
-silero-vad==6.2.3
+# Web / HTTP
+requests>=2.31.0
+beautifulsoup4>=4.12.0
+lxml>=4.9.0
 
-# ===== Web & API =====
-fastapi==0.115.0
-uvicorn==0.32.0
-requests==2.34.2
-pydantic==2.13.4
-ddgs==9.16.1
-beautifulsoup4==4.15.0
+# Config
+pyyaml>=6.0.0
 
-# ===== Audio & GUI =====
-pywebview==6.2.1
-sounddevice==0.5.6
-pyyaml==6.0.2
+# Búsqueda web (opcional pero recomendado para noticias)
+ddgs>=4.0.0
 
-# ===== Reconocimiento de canciones =====
-shazamio==0.9.0
+# Utilidades
+pydub>=0.25.1
 
-# ===== Utilidades =====
-python-dotenv==1.2.2
-pydub==0.25.1
-numpy==2.3.5
-
-# ===== Testing (opcional) =====
-pytest==9.0.3
+# Testing
+pytest>=7.4.0

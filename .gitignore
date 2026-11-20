@@ -1,3 +1,4 @@
+# Build outputs
 bin/
 obj/
 *.user
@@ -9,14 +10,52 @@ obj/
 .vs/
 *.exe
 *.dll
+
+# Secrets - NEVER commit these
 api-token.json
-node_modules/
-clipboard_ref.png
+*cred.xml
+telegram-bot-config.json
+
+# Local config / data (generated at runtime)
 *.env
 logs/
-data/profile.db
+data/
+*.db
+emma_prefs.json
+emma_learning.json
+memoria_emma.json
+network-config.json
+cline_mcp_settings.json
+mcp-config.json
+opencode.json
+ai-config.json
+melodias.json
+package-lock.json
+package.json
+*.onnx
+*.bin
+voces_demo/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.coverage
 
 # Vite / pywebview
 avatar/dist/
 avatar/node_modules/
+
+# Backup files (local only)
+*_backup_*/
+*_COPY.*
+*.backup_*
+voice_loop_backup*.py
+voice_loop_gui.py
+voice_loop_profesional*.py
+voice_loop_ui_fix*.py
+voice_loop_COPY.py
+voice_loop_restored.py
 
