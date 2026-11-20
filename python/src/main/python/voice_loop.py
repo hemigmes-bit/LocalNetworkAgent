@@ -6699,8 +6699,13 @@ def main():
 
     turn_from_barge = False
 
+    def listening_status(wake_until: float) -> str:
+        """Mensaje de estado para la UI: si estamos en la ventana de seguimiento
+        no hace falta decir 'Emma', fuera de ella sí."""
+        if time.time() < wake_until:
+            return "Escuchando... (no hace falta decir 'Emma')"
+        return "Di 'Emma' para empezar..."
     
-
     # VAD iterator for continuous listening
 
     vad_iter = VADIterator(
