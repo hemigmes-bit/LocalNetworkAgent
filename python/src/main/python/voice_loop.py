@@ -78,6 +78,23 @@ from collections import deque
 
 from dataclasses import dataclass, asdict, field
 
+# Prevenir salvapantallas/suspensión en Windows durante conversación activa
+try:
+    import ctypes
+    from ctypes import wintypes
+    # Constantes para SetThreadExecutionState
+    ES_CONTINUOUS = 0x80000000
+    ES_SYSTEM_REQUIRED = 0x00000001
+    ES_DISPLAY_REQUIRED = 0x00000002
+    _SetThreadExecutionState = ctypes.windll.kernel32.SetThreadExecutionState
+    _SetThreadExecutionState.argtypes = [wintypes.DWORD]
+    _SetThreadExecutionState.restype = wintypes.DWORD
+    _HAS_WIN_EXEC_STATE = True
+except Exception:
+    _HAS_WIN_EXEC_STATE = False
+    _SetThreadExecutionState = None
+    ES_CONTINUOUS = ES_SYSTEM_REQUIRED = ES_DISPLAY_REQUIRED = 0
+
 from typing import Deque, List, Dict, Any, Optional
 
 
@@ -6691,6 +6708,23 @@ def main():
 
     holder = {}
 
+    # --- Prevenir salvapantallas/suspensión en Windows ---
+    _exec_state = {"active": False}
+
+    def _prevent_sleep(active: bool) -> None:
+        """Activa/desactiva prevención de salvapantallas y suspensión."""
+        if not _HAS_WIN_EXEC_STATE:
+            return
+        if active and not _exec_state["active"]:
+            # ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED
+            _SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED)
+            _exec_state["active"] = True
+            print("   [POWER] Salvapantallas/suspensión desactivados")
+        elif not active and _exec_state["active"]:
+            _SetThreadExecutionState(ES_CONTINUOUS)
+            _exec_state["active"] = False
+            print("   [POWER] Salvapantallas/suspensión restaurados")
+
     # Palabra clave: instante hasta el que se aceptan seguimientos sin repetir
 
     # "Emma", y si el turno en curso nacio de una interrupcion.
@@ -6888,6 +6922,8 @@ def main():
             elif ev and "end" in ev and speech_started:
 
                 print("   [VAD] Fin de voz detectado (esperando silencio)")
+
+                _prevent_sleep(True)  # Usuario hablando: evitar salvapantallas
 
 
 
@@ -7239,6 +7275,8 @@ def main():
                     # Preparar respuesta LLM + TTS streaming
 
                     conversation_active = True
+
+                    _prevent_sleep(True)  # Turno activo: evitar salvapantallas
 
                     cancel_event.clear()
 
@@ -7824,6 +7862,8 @@ def main():
 
                     conversation_active = False
 
+                    _prevent_sleep(False)  # Turno terminado: restaurar salvapantallas
+
                     current_speech = None
 
                     # Tras responder se aceptan seguimientos sin repetir "Emma".
@@ -7845,6 +7885,8 @@ def main():
         print("\nKeyboard interrupt")
 
     finally:
+
+        _prevent_sleep(False)  # Asegurar restauración al salir
 
         print(
             "   [ENGINE] Fin del bucle "
