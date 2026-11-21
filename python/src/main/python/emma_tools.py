@@ -499,10 +499,11 @@ def detect_local_intent(text: str) -> Optional[Dict[str, Any]]:
 
 
 # ---------------------------------------------------------------------------
-# Definicion de herramientas (pocas y con descripciones cortas)
+# Definicion de herramientas
 # ---------------------------------------------------------------------------
-
-TOOLS: List[Dict[str, Any]] = [
+# Herramientas que el MODEL puede llamar (tool calling real).
+# Solo las que necesitan razonamiento: busqueda web, memoria, perfil.
+MODEL_TOOLS: List[Dict[str, Any]] = [
     {
         "type": "function",
         "function": {
@@ -535,48 +536,6 @@ TOOLS: List[Dict[str, Any]] = [
     {
         "type": "function",
         "function": {
-            "name": "calculate",
-            "description": "Calcula una operacion aritmetica exacta (sumas, porcentajes, potencias, raices).",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "expression": {
-                        "type": "string",
-                        "description": "Expresion como '(1200*0.21)+50' o '15/100*200'.",
-                    },
-                },
-                "required": ["expression"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "current_date",
-            "description": "Fecha y hora actuales del sistema. Usala para 'hoy', 'ayer', 'este ano' o la hora.",
-            "parameters": {"type": "object", "properties": {}},
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "date_calculate",
-            "description": "Calcula el dia de la semana para una fecha dada. Usala para 'que dia cae el 9 de enero de 2027' o 'what day is january 9 2027'.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "date": {
-                        "type": "string",
-                        "description": "Fecha en formato YYYY-MM-DD o DD/MM/YYYY o '9 de enero de 2027'.",
-                    },
-                },
-                "required": ["date"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
             "name": "get_profile",
             "description": "Perfil del alumno: nivel, objetivos e intereses.",
             "parameters": {"type": "object", "properties": {}},
@@ -603,7 +562,7 @@ TOOLS: List[Dict[str, Any]] = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "query": {"type": "string", "description": "Palabras clave."},
+                    "query": {"type": "string", "description": "Tema a buscar."},
                     "limit": {"type": "integer", "description": "1-5."},
                 },
                 "required": ["query"],
@@ -618,15 +577,25 @@ TOOLS: List[Dict[str, Any]] = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "item_id": {"type": "integer", "description": "ID del elemento."},
-                    "kind": {"type": "string", "enum": ["error", "vocab"]},
-                    "correct": {"type": "boolean", "description": "True si acerto, False si fallo."},
+                    "item_id": {"type": "integer", "description": "ID del repaso."},
+                    "correct": {"type": "boolean", "description": "True si acerto."},
                 },
-                "required": ["item_id", "kind", "correct"],
+                "required": ["item_id", "correct"],
             },
         },
     },
 ]
+
+# Herramientas LOCALES (deterministas): se resuelven ANTES de llamar al modelo.
+# El 9B falla en aritmetica y no sabe la fecha real; no vale la pena gastar
+# tokens del contexto ni VRAM en que el modelo las llame.
+LOCAL_TOOLS = ("calculate", "current_date", "date_calculate")
+
+# Conjunto de nombres validos para validacion (solo MODEL_TOOLS).
+_TOOL_NAMES = {tool["function"]["name"] for tool in MODEL_TOOLS}
+
+# Para compatibilidad: TOOLS apunta a MODEL_TOOLS (lo que ve el modelo).
+TOOLS = MODEL_TOOLS
 
 _TOOL_NAMES = {tool["function"]["name"] for tool in TOOLS}
 
@@ -706,7 +675,8 @@ def validate_arguments(name: str, args: Any) -> Tuple[Optional[Dict[str, Any]], 
         args = {}
     if not isinstance(args, dict):
         return None, "los argumentos deben ser un objeto JSON"
-    if name not in _TOOL_NAMES:
+    # Permitir herramientas locales (no estan en _TOOL_NAMES pero son validas)
+    if name not in _TOOL_NAMES and name not in LOCAL_TOOLS:
         return None, f"herramienta desconocida: {name}"
     try:
         if name == "web_search":
@@ -744,6 +714,11 @@ def validate_arguments(name: str, args: Any) -> Tuple[Optional[Dict[str, Any]], 
             return {
                 "query": _arg_str(args, "query", max_len=200),
                 "limit": _arg_int(args, "limit", 2, 1, 5),
+            }, ""
+        if name == "record_review":
+            return {
+                "item_id": _arg_int(args, "item_id", 0, 1),
+                "correct": _arg_bool(args, "correct"),
             }, ""
     except ToolArgumentError as exc:
         return None, str(exc)
