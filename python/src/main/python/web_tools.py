@@ -602,6 +602,13 @@ _NEWS_WORDS = (
     "elecciones", "eleccion", "election", "elections",
     "comicios", "votaciones", "polls",
 )
+# Palabras clave de tiempo meteorologico (no noticias).
+_WEATHER_WORDS = (
+    "weather", "tiempo", "pronostico", "pronóstico", "forecast",
+    "clima", "temperatura", "temperature", "lluvia", "rain",
+    "nieve", "snow", "viento", "wind", "humedad", "humidity",
+    "que tiempo", "what.*weather", "how.*weather",
+)
 _FACTUAL_PATTERNS = (
     # "que ha pasado hoy", "que ha ocurrido": la pregunta de actualidad mas
     # natural no decia "noticias" ni "pasa" (que no coincide con "pasado").
@@ -717,7 +724,7 @@ def _has_phrase(text: str, phrase: str) -> bool:
 
 
 def detect_intent(text: str) -> Optional[str]:
-    """Devuelve 'url', 'news', 'search' o None si no hace falta la web."""
+    """Devuelve 'url', 'news', 'weather', 'search' o None si no hace falta la web."""
     if not text or not text.strip():
         return None
 
@@ -733,6 +740,8 @@ def detect_intent(text: str) -> Optional[str]:
 
     if any(_has_phrase(norm, w) for w in _NEWS_WORDS):
         return "news"
+    if any(_has_phrase(norm, w) for w in _WEATHER_WORDS):
+        return "weather"
     if any(_has_phrase(norm, v) for v in _SEARCH_VERBS):
         return "search"
     if any(re.search(p, norm) for p in _FACTUAL_PATTERNS):
@@ -872,6 +881,46 @@ def news_query(text: str, lang: str = "es") -> str:
     )
     q = re.sub(r"\s+", " ", q).strip(" ,.;:¿?¡!")
     suffix = "news today" if str(lang).lower() == "en" else "noticias hoy"
+    return f"{q} {suffix}".strip() if q else suffix
+
+
+# Patrones para detectar consultas meteorologicas
+_WEATHER_STEM_RE = re.compile(
+    r"\b(?:que\s+tiempo|what(?:'s|\s+is)?\s+the\s+weather|"
+    r"how(?:'s|\s+is)?\s+the\s+weather|"
+    r"pronostico|pronóstico|forecast|weather)\b",
+    re.IGNORECASE,
+)
+_WEATHER_TIME_RE = re.compile(
+    r"\b(?:hoy|mañana|esta\s+semana|this\s+week|today|tomorrow|"
+    r"fin\s+de\s+semana|weekend)\b",
+    re.IGNORECASE,
+)
+_WEATHER_WORD_RE = re.compile(
+    r"\b(?:tiempo|weather|pronostico|pronóstico|forecast|clima|"
+    r"temperatura|temperature|lluvia|rain|nieve|snow|viento|wind)\b",
+    re.IGNORECASE,
+)
+
+
+def weather_query(text: str, lang: str = "es") -> str:
+    """Convierte una pregunta del tiempo en una consulta efectiva.
+
+    Los buscadores responden mejor a "Logroño weather forecast" que a
+    "what's the weather in Logroño today", que devuelve Wikipedia.
+    """
+    q = clean_query(text)
+    q = _WEATHER_STEM_RE.sub(" ", q)
+    q = _WEATHER_WORD_RE.sub(" ", q)
+    q = _WEATHER_TIME_RE.sub(" ", q)
+    q = re.sub(
+        r"^(?:(?:sobre|de|del|en|acerca\s+de|about|in|on|for)\s+)+",
+        "",
+        q.strip(),
+        flags=re.IGNORECASE,
+    )
+    q = re.sub(r"\s+", " ", q).strip(" ,.;:¿?¡!")
+    suffix = "weather forecast" if str(lang).lower() == "en" else "pronóstico del tiempo"
     return f"{q} {suffix}".strip() if q else suffix
 
 
@@ -2230,6 +2279,8 @@ def gather_context(
     else:
         if intent == "news":
             query = news_query(text, lang)
+        elif intent == "weather":
+            query = weather_query(text, lang)
         else:
             query = clean_query(text)
         query = _merge_followup(query, clean_query(previous))

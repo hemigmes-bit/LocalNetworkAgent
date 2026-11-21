@@ -1234,6 +1234,13 @@ def gather_tool_context(
     # la anadimos (ej: "what day is today AND when is the election in spain").
     needs_web = needs_tools(user_text) and (not local or tool_hint(user_text) == "web")
     if needs_web:
+        # Detectar si es consulta meteorologica para usar query especializada
+        intent = web_tools.detect_intent(user_text)
+        if intent == "weather":
+            base_query = web_tools.weather_query(user_text, lang)
+        else:
+            base_query = web_tools.clean_query(user_text) or _clean(user_text)
+
         # Seguimiento ("cuentame mas", "tell me more", "who can access..."):
         # reutiliza el tema de la ultima busqueda web para ampliar con datos
         # nuevos, en vez de buscar la frase literal y quedarse sin contexto.
@@ -1261,10 +1268,7 @@ def gather_tool_context(
             calls.append({
                 "function": {
                     "name": "web_search",
-                    "arguments": {
-                        "query": web_tools.clean_query(user_text) or _clean(user_text),
-                        "lang": lang,
-                    },
+                    "arguments": {"query": base_query, "lang": lang},
                 }
             })
 
@@ -1306,13 +1310,16 @@ def gather_tool_context(
                     }
                 }]
             else:
+                # Usar weather_query si es consulta meteorologica
+                intent = web_tools.detect_intent(user_text)
+                if intent == "weather":
+                    base_query = web_tools.weather_query(user_text, lang)
+                else:
+                    base_query = web_tools.clean_query(user_text) or _clean(user_text)
                 calls = [{
                     "function": {
                         "name": "web_search",
-                        "arguments": {
-                            "query": web_tools.clean_query(user_text) or _clean(user_text),
-                            "lang": lang,
-                        },
+                        "arguments": {"query": base_query, "lang": lang},
                     }
                 }]
 
