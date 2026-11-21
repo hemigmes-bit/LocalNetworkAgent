@@ -24,6 +24,7 @@ Se puede probar por separado:
 
 from __future__ import annotations
 
+import asyncio
 import ast
 import json
 import math
@@ -589,7 +590,7 @@ MODEL_TOOLS: List[Dict[str, Any]] = [
 # Herramientas LOCALES (deterministas): se resuelven ANTES de llamar al modelo.
 # El 9B falla en aritmetica y no sabe la fecha real; no vale la pena gastar
 # tokens del contexto ni VRAM en que el modelo las llame.
-LOCAL_TOOLS = ("calculate", "current_date", "date_calculate")
+LOCAL_TOOLS = ("calculate", "current_date", "date_calculate", "fetch_weather")
 
 # Conjunto de nombres validos para validacion (solo MODEL_TOOLS).
 _TOOL_NAMES = {tool["function"]["name"] for tool in MODEL_TOOLS}
@@ -720,6 +721,11 @@ def validate_arguments(name: str, args: Any) -> Tuple[Optional[Dict[str, Any]], 
                 "item_id": _arg_int(args, "item_id", 0, 1),
                 "correct": _arg_bool(args, "correct"),
             }, ""
+        if name == "fetch_weather":
+            lat = float(args.get("lat", 40.42))
+            lon = float(args.get("lon", -3.70))
+            lang = args.get("lang", "es")
+            return {"lat": lat, "lon": lon, "lang": lang}, ""
     except ToolArgumentError as exc:
         return None, str(exc)
     return None, "herramienta desconocida"
@@ -816,6 +822,12 @@ def tool_result_hint(used: Optional[List[str]] = None) -> str:
             "\n\nFECHA CALCULADA: el mensaje 'tool' trae el dia de la semana "
             "exacto para la fecha pedida. Usa ese dia, no lo calcules mentalmente."
         )
+    if "fetch_weather" in used_set:
+        return (
+            "\n\nTIEMPO: el mensaje 'tool' trae el tiempo actual y pronostico "
+            "exacto para la ubicacion pedida. Usa esos datos tal cual; no inventes "
+            "el tiempo ni busques en otra fuente."
+        )
     if "fetch_page" in used_set:
         return TOOL_RESULT_HINT
     return TOOL_SEARCH_HINT
@@ -830,6 +842,8 @@ def tool_reinforcement(used: Optional[List[str]] = None) -> str:
         return "Responde con la fecha y hora del resultado, sin inventarlas."
     if "date_calculate" in used_set:
         return "Responde con el dia de la semana del resultado, sin inventarlo."
+    if "fetch_weather" in used_set:
+        return "Responde con el tiempo del resultado, sin inventarlo."
     if "fetch_page" in used_set:
         return TOOL_REINFORCE_PAGE
     return TOOL_REINFORCE_SEARCH
@@ -958,6 +972,20 @@ def _fallback_arguments(name: str, user_text: str, lang: str) -> Dict[str, Any]:
     if name == "date_calculate":
         date_str = _extract_date_from_text(user_text)
         return {"date": date_str} if date_str else {}
+    if name == "fetch_weather":
+        city_coords = {
+            "logrono": (42.46, -2.45), "logroño": (42.46, -2.45),
+            "madrid": (40.42, -3.70), "barcelona": (41.38, 2.17),
+            "valencia": (39.47, -0.38), "sevilla": (37.38, -5.98),
+            "bilbao": (43.26, -2.93), "malaga": (36.72, -4.42),
+        }
+        lat, lon = 40.42, -3.70
+        q_lower = user_text.lower()
+        for city, coords in city_coords.items():
+            if city in q_lower:
+                lat, lon = coords
+                break
+        return {"lat": lat, "lon": lon, "lang": lang}
     if name == "get_due_reviews":
         return {"limit": 3}
     if name == "search_sessions":
@@ -1141,6 +1169,29 @@ def execute_tool(
                 },
             }
 
+
+        if name == "fetch_weather":
+            # args: {"lat": float, "lon": float, "lang": "es"}
+            lat = float(args.get("lat", 40.42))
+            lon = float(args.get("lon", -3.70))
+            lang = args.get("lang", "es")
+            # Extract city from query if available for better UX
+            city = args.get("city", "")
+            weather_data = asyncio.run(web_tools.fetch_weather(lat, lon, lang))
+            if weather_data.get("error"):
+                return {"ok": False, "error": weather_data["error"]}
+            summary = web_tools.extract_weather_summary(weather_data, lang)
+            return {
+                "ok": True,
+                "result": {
+                    "lat": lat,
+                    "lon": lon,
+                    "city": city,
+                    "summary": summary,
+                    "raw": weather_data,
+                },
+            }
+
         # Memoria: reutiliza la validacion existente.
         result = emma_memory.execute_tool(name, args)
         return result
@@ -1194,6 +1245,8 @@ def _compact_result(name: str, result: Dict[str, Any], limit: int) -> str:
             f"{data.get('spoken_es')} ({data.get('iso')}). "
             f"{data.get('spoken_en')}"
         )
+    elif name == "fetch_weather":
+        text = data.get("summary") or json.dumps(data, ensure_ascii=False)
     else:
         text = json.dumps(data, ensure_ascii=False)
     return text[:limit]
@@ -1234,43 +1287,61 @@ def gather_tool_context(
     # la anadimos (ej: "what day is today AND when is the election in spain").
     needs_web = needs_tools(user_text) and (not local or tool_hint(user_text) == "web")
     if needs_web:
-        # Detectar si es consulta meteorologica para usar query especializada
+        # Detectar si es consulta meteorologica para usar herramienta dedicada
         intent = web_tools.detect_intent(user_text)
         if intent == "weather":
-            base_query = web_tools.weather_query(user_text, lang)
+            # Extraer coordenadas aproximadas
+            city_coords = {
+                "logrono": (42.46, -2.45), "logroño": (42.46, -2.45),
+                "madrid": (40.42, -3.70), "barcelona": (41.38, 2.17),
+                "valencia": (39.47, -0.38), "sevilla": (37.38, -5.98),
+                "bilbao": (43.26, -2.93), "malaga": (36.72, -4.42),
+            }
+            lat, lon = 40.42, -3.70  # default Madrid
+            q_lower = user_text.lower()
+            for city, coords in city_coords.items():
+                if city in q_lower:
+                    lat, lon = coords
+                    break
+            calls.append({
+                "function": {
+                    "name": "fetch_weather",
+                    "arguments": {"lat": lat, "lon": lon, "lang": lang, "city": city},
+                }
+            })
         else:
             base_query = web_tools.clean_query(user_text) or _clean(user_text)
 
-        # Seguimiento ("cuentame mas", "tell me more", "who can access..."):
-        # reutiliza el tema de la ultima busqueda web para ampliar con datos
-        # nuevos, en vez de buscar la frase literal y quedarse sin contexto.
-        reuse_query = needs_followup(user_text)
-        query = ""
+            # Seguimiento ("cuentame mas", "tell me more", "who can access..."):
+            # reutiliza el tema de la ultima busqueda web para ampliar con datos
+            # nuevos, en vez de buscar la frase literal y quedarse sin contexto.
+            reuse_query = needs_followup(user_text)
+            query = ""
 
-        if reuse_query:
-            # El tema anterior manda; las palabras nuevas ("access", "history")
-            # añaden otra cara del mismo asunto para no devolver lo mismo.
-            extra = [
-                word
-                for word in sorted(
-                    _significant_words(user_text) - _significant_words(_LAST_WEB_QUERY)
-                )
-                if len(word) > 4
-            ][:3]
-            query = " ".join([_LAST_WEB_QUERY] + extra).strip()
-            calls.append({
-                "function": {
-                    "name": "web_search",
-                    "arguments": {"query": query, "lang": lang},
-                }
-            })
-        else:
-            calls.append({
-                "function": {
-                    "name": "web_search",
-                    "arguments": {"query": base_query, "lang": lang},
-                }
-            })
+            if reuse_query:
+                # El tema anterior manda; las palabras nuevas ("access", "history")
+                # añaden otra cara del mismo asunto para no devolver lo mismo.
+                extra = [
+                    word
+                    for word in sorted(
+                        _significant_words(user_text) - _significant_words(_LAST_WEB_QUERY)
+                    )
+                    if len(word) > 4
+                ][:3]
+                query = " ".join([_LAST_WEB_QUERY] + extra).strip()
+                calls.append({
+                    "function": {
+                        "name": "web_search",
+                        "arguments": {"query": query, "lang": lang},
+                    }
+                })
+            else:
+                calls.append({
+                    "function": {
+                        "name": "web_search",
+                        "arguments": {"query": base_query, "lang": lang},
+                    }
+                })
 
     # Si no hay local ni web pero el modelo deberia elegir, pedimos al modelo.
     if not calls:
@@ -1309,13 +1380,43 @@ def gather_tool_context(
                         },
                     }
                 }]
+            # Si el modelo no llama ninguna herramienta pero el turno lo pide...
+        if not calls and needs_tools(user_text):
+            hint = tool_hint(user_text)
+            if hint == "memory":
+                calls = [{
+                    "function": {
+                        "name": "search_sessions",
+                        "arguments": {
+                            "query": web_tools.clean_query(user_text) or _clean(user_text),
+                            "limit": 2,
+                        },
+                    }
+                }]
             else:
                 # Usar weather_query si es consulta meteorologica
                 intent = web_tools.detect_intent(user_text)
                 if intent == "weather":
-                    base_query = web_tools.weather_query(user_text, lang)
+                    city_coords = {
+                        "logrono": (42.46, -2.45), "logroño": (42.46, -2.45),
+                        "madrid": (40.42, -3.70), "barcelona": (41.38, 2.17),
+                        "valencia": (39.47, -0.38), "sevilla": (37.38, -5.98),
+                        "bilbao": (43.26, -2.93), "malaga": (36.72, -4.42),
+                    }
+                    lat, lon = 40.42, -3.70
+                    q_lower = user_text.lower()
+                    for city, coords in city_coords.items():
+                        if city in q_lower:
+                            lat, lon = coords
+                            break
+                    calls = [{
+                        "function": {
+                            "name": "fetch_weather",
+                            "arguments": {"lat": lat, "lon": lon, "lang": lang, "city": city},
+                        }
+                    }]
                 else:
-                    base_query = web_tools.clean_query(user_text) or _clean(user_text)
+                    base_query = web_tools.weather_query(user_text, lang)
                 calls = [{
                     "function": {
                         "name": "web_search",
@@ -1387,6 +1488,15 @@ def gather_tool_context(
                 "snippet": payload.get("snippet") or "",
                 "kind": "page",
                 "error": payload.get("error") or "",
+            })
+        elif name == "fetch_weather" and isinstance(payload, dict):
+            sources.append({
+                "title": payload.get("summary") or f"Weather for {payload.get('city', 'location')}",
+                "url": f"https://wttr.in/{payload.get('lat', '')},{payload.get('lon', '')}",
+                "site": "wttr.in",
+                "snippet": payload.get("summary", "")[:300],
+                "kind": "weather",
+                "error": "",
             })
 
     # Fuentes unicas y acotadas.

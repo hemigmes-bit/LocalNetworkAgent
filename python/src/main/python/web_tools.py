@@ -19,11 +19,14 @@ Uso de prueba:
 
 from __future__ import annotations
 
+import asyncio
+import aiohttp
 import ipaddress
 import json
 import re
 import socket
 import sys
+import threading
 import time
 import urllib.parse
 import xml.etree.ElementTree as ET
@@ -51,6 +54,21 @@ DEFAULTS: Dict[str, Any] = {
     "searxng_categories": "general",
     "searxng_engines": ["bing", "google", "duckduckgo"],
 }
+
+# Cache TTL por dominio (segundos): evita datos obsoletos en clima/noticias.
+_CACHE_TTL_BY_DOMAIN = {
+    "weather": 900,      # 15 min: clima cambia rapido
+    "news": 1800,        # 30 min: noticias frescas
+    "wikipedia": 86400,  # 24h: enciclopedico
+    "default": 300,      # 5 min: resto
+}
+_CACHE_TTL_S = 300  # fallback legacy
+STORY_CACHE_TTL_S = 6 * 3600
+
+# Semáforo global para limitar concurrencia de descargas (evita 429/ban).
+# Valor seguro para weather.com, bbc.com, etc.
+_FETCH_SEMAPHORE = None  # se inicializa perezosamente en _get_fetch_semaphore()
+_FETCH_SEMAPHORE_SYNC = None  # para fetch_page sincrono
 
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -924,6 +942,87 @@ def weather_query(text: str, lang: str = "es") -> str:
     return f"{q} {suffix}".strip() if q else suffix
 
 
+# ---------------------------------------------------------------------------
+# Weather directo (wttr.in / open-meteo) - sin scraping, JSON estructurado
+# ---------------------------------------------------------------------------
+
+async def fetch_weather(lat: float, lon: float, lang: str = "es") -> Dict[str, Any]:
+    """Obtiene tiempo actual y pronóstico de wttr.in (gratis, sin API key).
+
+    Devuelve dict con: current_condition, weather (array días), error.
+    Cache TTL 15 min via _cache_get/_cache_put en gather_context.
+    """
+    url = f"https://wttr.in/{lat},{lon}?format=j1&lang={lang[:2]}"
+    cache_key = f"weather:{lat:.4f},{lon:.4f}"
+    cached = _cache_get(cache_key)
+    if cached:
+        return cached
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, timeout=5) as resp:
+                if resp.status >= 400:
+                    return {"error": f"wttr.in HTTP {resp.status}"}
+                # wttr.in devuelve JSON con Content-Type text/plain
+                text = await resp.text()
+                import json
+                data = json.loads(text)
+    except Exception as exc:
+        return {"error": f"weather fetch: {type(exc).__name__}"}
+
+    # wttr.in devuelve: current_condition[], weather[] (3 días)
+    _cache_put(cache_key, data)
+    return data
+
+
+def extract_weather_summary(data: Dict[str, Any], lang: str = "es") -> str:
+    """Convierte respuesta wttr.in a frase natural para Emma."""
+    if data.get("error"):
+        return f"No pude obtener el tiempo: {data['error']}"
+
+    current = data.get("current_condition", [{}])[0]
+    today = data.get("weather", [{}])[0]
+
+    temp_c = current.get("temp_C", "?")
+    feels_c = current.get("FeelsLikeC", "?")
+    desc = current.get("weatherDesc", [{}])[0].get("value", "")
+    humidity = current.get("humidity", "?")
+    wind_kmh = current.get("windspeedKmph", "?")
+
+    max_c = today.get("maxtempC", "?")
+    min_c = today.get("mintempC", "?")
+    hourly = today.get("hourly", [])
+    rain_today = any(
+        int(h.get("chanceofrain", "0")) > 30
+        for h in hourly
+    )
+
+    if str(lang).lower() == "en":
+        parts = [
+            f"Currently {desc.lower()}, {temp_c}°C (feels {feels_c}°C).",
+            f"Today {min_c}–{max_c}°C.",
+        ]
+        if rain_today:
+            parts.append("Rain expected.")
+        if wind_kmh != "?":
+            parts.append(f"Wind {wind_kmh} km/h.")
+        if humidity != "?":
+            parts.append(f"Humidity {humidity}%.")
+        return " ".join(parts)
+    else:
+        parts = [
+            f"Ahora {desc.lower()}, {temp_c}°C (sensación {feels_c}°C).",
+            f"Hoy {min_c}–{max_c}°C.",
+        ]
+        if rain_today:
+            parts.append("Se espera lluvia.")
+        if wind_kmh != "?":
+            parts.append(f"Viento {wind_kmh} km/h.")
+        if humidity != "?":
+            parts.append(f"Humedad {humidity}%.")
+        return " ".join(parts)
+
+
 def _wants_wikipedia(text: str) -> bool:
     """Wikipedia aporta en preguntas de definicion, entidad o historia."""
     norm = _norm(text)
@@ -1200,17 +1299,75 @@ def _page_title(soup: BeautifulSoup) -> str:
     return ""
 
 
+# ---------------------------------------------------------------------------
+# Cache con TTL por dominio
+# ---------------------------------------------------------------------------
+
+_CACHES: Dict[str, Tuple[float, Any]] = {}  # key -> (timestamp, value)
+_STORY_CACHE: Dict[str, Tuple[float, Any]] = {}
+
+
+# Semáforo global para limitar concurrencia de descargas (evita 429/ban).
+# Valor seguro para weather.com, bbc.com, etc.
+_FETCH_SEMAPHORE = None  # se inicializa perezosamente en _get_fetch_semaphore()
+_FETCH_SEMAPHORE_SYNC = None  # para fetch_page sincrono
+
+
+def _get_fetch_semaphore() -> asyncio.Semaphore:
+    """Inicializa perezosamente el semáforo async (evita loop no creado al importar)."""
+    global _FETCH_SEMAPHORE
+    if _FETCH_SEMAPHORE is None:
+        _FETCH_SEMAPHORE = asyncio.Semaphore(2)  # máx 2 descargas concurrentes async
+    return _FETCH_SEMAPHORE
+
+
+def _get_fetch_semaphore_sync() -> threading.Semaphore:
+    """Semáforo thread-safe para fetch_page sincrono."""
+    global _FETCH_SEMAPHORE_SYNC
+    if _FETCH_SEMAPHORE_SYNC is None:
+        _FETCH_SEMAPHORE_SYNC = threading.Semaphore(2)  # máx 2 descargas concurrentes sync
+    return _FETCH_SEMAPHORE_SYNC
+
+
+def _domain_from_url(url: str) -> str:
+    """Extrae dominio base para TTL de cache."""
+    try:
+        host = urllib.parse.urlparse(url).netloc.lower()
+        host = host.replace("www.", "")
+        if any(d in host for d in ("weather.", "meteo.", "wttr.", "open-meteo.")):
+            return "weather"
+        if any(d in host for d in ("news.", "bbc.", "reuters.", "apnews.", "elpais.", "elmundo.")):
+            return "news"
+        if "wikipedia.org" in host:
+            return "wikipedia"
+        return "default"
+    except Exception:
+        return "default"
+
+
+def _cache_ttl_for_url(url: str) -> int:
+    domain = _domain_from_url(url)
+    return _CACHE_TTL_BY_DOMAIN.get(domain, _CACHE_TTL_BY_DOMAIN["default"])
+
+
 def _cache_get(key: str) -> Any:
-    entry = _CACHE.get(key)
-    if entry and time.time() - entry[0] < CACHE_TTL_S:
-        return entry[1]
+    entry = _CACHES.get(key)
+    if entry:
+        ts, val = entry
+        ttl = _CACHE_TTL_S
+        if key.startswith("page:"):
+            parts = key.split(":", 2)
+            if len(parts) == 3:
+                ttl = _cache_ttl_for_url(parts[2])
+        if time.time() - ts < ttl:
+            return val
     return None
 
 
 def _cache_put(key: str, value: Any) -> None:
-    if len(_CACHE) > 80:
-        _CACHE.clear()
-    _CACHE[key] = (time.time(), value)
+    if len(_CACHES) > 80:
+        _CACHES.clear()
+    _CACHES[key] = (time.time(), value)
 
 
 # ---------------------------------------------------------------------------
@@ -1290,6 +1447,12 @@ def fetch_page(url: str, timeout: float = 7.0, max_chars: int = 2200) -> Dict[st
     if cached is not None:
         return cached
 
+    # Semáforo para limitar concurrencia (evita 429/ban en sitios sensibles)
+    sem = _get_fetch_semaphore_sync()
+    acquired = sem.acquire(timeout=30)
+    if not acquired:
+        return {"error": "Semaphore timeout: too many concurrent fetches"}
+
     result: Dict[str, Any] = {
         "title": "",
         "url": url,
@@ -1303,24 +1466,28 @@ def fetch_page(url: str, timeout: float = 7.0, max_chars: int = 2200) -> Dict[st
     allowed, reason = _url_allowed(url)
     if not allowed:
         result["error"] = reason
+        sem.release()
         return result
 
+    # Descarga con requests + fallback a reader
     try:
         with requests.get(
             url, headers=HEADERS, timeout=timeout, stream=True, allow_redirects=True
         ) as response:
             if response.status_code >= 400:
-                # 403/429/451/503: cortafuegos o paywall. Probamos el lector.
                 if response.status_code in READER_FALLBACK_STATUS:
                     reader = _fetch_via_reader(url, timeout, max_chars)
                     if not reader.get("error"):
                         _cache_put(f"page:{max_chars}:{url}", reader)
+                        sem.release()
                         return reader
                 result["error"] = f"HTTP {response.status_code}"
+                sem.release()
                 return result
             content_type = (response.headers.get("content-type") or "").lower()
             if not any(t in content_type for t in ("text/html", "text/plain", "application/xhtml")):
                 result["error"] = f"Tipo de contenido no soportado: {content_type.split(';')[0]}"
+                sem.release()
                 return result
             raw = b""
             for chunk in response.iter_content(chunk_size=16384):
@@ -1333,17 +1500,22 @@ def fetch_page(url: str, timeout: float = 7.0, max_chars: int = 2200) -> Dict[st
         reader = _fetch_via_reader(url, timeout, max_chars)
         if not reader.get("error"):
             _cache_put(f"page:{max_chars}:{url}", reader)
+            sem.release()
             return reader
         result["error"] = "Tiempo de espera agotado"
+        sem.release()
         return result
     except Exception as exc:
         reader = _fetch_via_reader(url, timeout, max_chars)
         if not reader.get("error"):
             _cache_put(f"page:{max_chars}:{url}", reader)
+            sem.release()
             return reader
         result["error"] = f"{type(exc).__name__}: {exc}"
+        sem.release()
         return result
 
+    # Decodificar y extraer texto
     try:
         html = raw.decode(encoding, errors="replace")
     except Exception:
@@ -1360,12 +1532,11 @@ def fetch_page(url: str, timeout: float = 7.0, max_chars: int = 2200) -> Dict[st
         if meta and meta.get("content"):
             text = meta["content"].strip()
 
-    # Paginas con muro de cookies o cargadas por JS dejan poco texto: el lector
-    # externo suele devolver el articulo completo.
     if len(text.strip()) < MIN_USEFUL_CHARS:
         reader = _fetch_via_reader(url, timeout, max_chars)
         if not reader.get("error") and len(reader.get("text") or "") > len(text.strip()):
             _cache_put(f"page:{max_chars}:{url}", reader)
+            sem.release()
             return reader
 
     result.update(
@@ -1379,13 +1550,8 @@ def fetch_page(url: str, timeout: float = 7.0, max_chars: int = 2200) -> Dict[st
         }
     )
     _cache_put(f"page:{max_chars}:{url}", result)
+    sem.release()
     return result
-
-
-# ---------------------------------------------------------------------------
-# Cuentos: seleccion de fuentes y material de apoyo
-# ---------------------------------------------------------------------------
-
 def _story_cache_get(key: str) -> Any:
     entry = _STORY_CACHE.get(key)
     if entry and time.time() - entry[0] < STORY_CACHE_TTL_S:
@@ -2285,98 +2451,131 @@ def gather_context(
             query = clean_query(text)
         query = _merge_followup(query, clean_query(previous))
 
-        news_items: List[Dict[str, Any]] = []
-        if intent == "news" and cfg.get("news", True):
-            news_items = news_search(
-                query, limit=max_results + 1, timeout=timeout, lang=lang
-            )
+        # Weather: fetch structured data from wttr.in (no scraping)
+        if intent == "weather":
+            city_coords = {
+                "logrono": (42.46, -2.45), "logroño": (42.46, -2.45),
+                "madrid": (40.42, -3.70), "barcelona": (41.38, 2.17),
+                "valencia": (39.47, -0.38), "sevilla": (37.38, -5.98),
+                "bilbao": (43.26, -2.93), "malaga": (36.72, -4.42),
+            }
+            lat, lon = 40.42, -3.70  # default Madrid
+            q_lower = text.lower()
+            for city, coords in city_coords.items():
+                if city in q_lower:
+                    lat, lon = coords
+                    break
 
-        # Wikipedia y DuckDuckGo son independientes: se lanzan en paralelo.
-        results: List[Dict[str, Any]] = []
-        wiki: Optional[Dict[str, Any]] = None
-        if cfg.get("wikipedia", True):
-            with ThreadPoolExecutor(max_workers=2) as executor:
-                search_future = executor.submit(
-                    search_web,
-                    query,
-                    lang,
-                    max_results + 2,
-                    timeout,
-                    extra_trusted,
-                    cfg,
-                )
-                wiki_future = executor.submit(
-                    wikipedia_lookup, _entity_query(query), lang, timeout, max_chars
-                )
-                try:
-                    results = search_future.result()
-                except Exception:
-                    results = []
-                try:
-                    wiki = wiki_future.result()
-                except Exception:
-                    wiki = None
-            if not (_wants_wikipedia(text) or len(results) < 2):
-                wiki = None
+            try:
+                weather_data = asyncio.run(fetch_weather(lat, lon, lang))
+                if not weather_data.get("error"):
+                    summary = extract_weather_summary(weather_data, lang)
+                    sources.append({
+                        "title": f"Tiempo en {lat:.2f},{lon:.2f}",
+                        "url": f"https://wttr.in/{lat},{lon}",
+                        "site": "wttr.in",
+                        "text": summary,
+                        "snippet": summary[:300],
+                        "kind": "weather",
+                        "error": "",
+                    })
+            except Exception:
+                pass  # fallback a busqueda web normal
+            kind = "weather"
+            query = weather_query(text, lang)
         else:
-            results = search_web(
-                query,
-                lang=lang,
-                max_results=max_results + 2,
-                timeout=timeout,
-                extra_trusted=extra_trusted,
-                config=cfg,
-            )
+            news_items: List[Dict[str, Any]] = []
+            if intent == "news" and cfg.get("news", True):
+                news_items = news_search(
+                    query, limit=max_results + 1, timeout=timeout, lang=lang
+                )
 
-        # Descargar en paralelo solo si aporta: con Wikipedia ya hay texto de
-        # sobra. En noticias tambien se baja el articulo: el titular no basta
-        # para responder "quien", "donde" o "como acceder".
-        fetch_candidates: List[Dict[str, Any]] = []
-        if fetch_pages > 0 and not wiki:
-            fetch_candidates = [r for r in results if r.get("kind") in ("search", "news")][:fetch_pages]
-        fetched: Dict[str, Dict[str, Any]] = {}
-        if fetch_candidates:
-            with ThreadPoolExecutor(max_workers=len(fetch_candidates)) as executor:
-                futures = {
-                    executor.submit(fetch_page, r["url"], timeout, max_chars): r["url"]
-                    for r in fetch_candidates
-                }
-                try:
-                    for future in as_completed(futures, timeout=timeout + 2):
-                        url = futures[future]
-                        try:
-                            page = future.result()
-                        except Exception:
-                            continue
-                        if page.get("text"):
-                            fetched[url] = page
-                except Exception:
-                    pass
-
-        # Orden: noticias, Wikipedia, paginas descargadas y snippets.
-        ordered: List[Dict[str, Any]] = list(news_items)
-        if wiki:
-            ordered.append(wiki)
-        for result in results:
-            page = fetched.get(result["url"])
-            if page and page.get("text"):
-                merged = dict(result)
-                merged["text"] = page["text"]
-                merged["title"] = page.get("title") or result.get("title") or result["url"]
-                ordered.append(merged)
+            # Wikipedia y DuckDuckGo son independientes: se lanzan en paralelo.
+            results: List[Dict[str, Any]] = []
+            wiki: Optional[Dict[str, Any]] = None
+            if cfg.get("wikipedia", True):
+                with ThreadPoolExecutor(max_workers=2) as executor:
+                    search_future = executor.submit(
+                        search_web,
+                        query,
+                        lang,
+                        max_results + 2,
+                        timeout,
+                        extra_trusted,
+                        cfg,
+                    )
+                    wiki_future = executor.submit(
+                        wikipedia_lookup, _entity_query(query), lang, timeout, max_chars
+                    )
+                    try:
+                        results = search_future.result()
+                    except Exception:
+                        results = []
+                    try:
+                        wiki = wiki_future.result()
+                    except Exception:
+                        wiki = None
+                if not (_wants_wikipedia(text) or len(results) < 2):
+                    wiki = None
             else:
-                ordered.append(result)
+                results = search_web(
+                    query,
+                    lang=lang,
+                    max_results=max_results + 2,
+                    timeout=timeout,
+                    extra_trusted=extra_trusted,
+                    config=cfg,
+                )
 
-        seen = set()
-        final: List[Dict[str, Any]] = []
-        for source in ordered:
-            key = _url_key(source["url"])
-            if key in seen:
-                continue
-            seen.add(key)
-            final.append(source)
-        sources = final[: max_results + 1]
-        kind = "news" if intent == "news" else "search"
+            # Descargar en paralelo solo si aporta: con Wikipedia ya hay texto de
+            # sobra. En noticias tambien se baja el articulo: el titular no basta
+            # para responder "quien", "donde" o "como acceder".
+            fetch_candidates: List[Dict[str, Any]] = []
+            if fetch_pages > 0 and not wiki:
+                fetch_candidates = [r for r in results if r.get("kind") in ("search", "news")][:fetch_pages]
+            fetched: Dict[str, Dict[str, Any]] = {}
+            if fetch_candidates:
+                with ThreadPoolExecutor(max_workers=len(fetch_candidates)) as executor:
+                    futures = {
+                        executor.submit(fetch_page, r["url"], timeout, max_chars): r["url"]
+                        for r in fetch_candidates
+                    }
+                    try:
+                        for future in as_completed(futures, timeout=timeout + 2):
+                            url = futures[future]
+                            try:
+                                page = future.result()
+                            except Exception:
+                                continue
+                            if page.get("text"):
+                                fetched[url] = page
+                    except Exception:
+                        pass
+
+            # Orden: noticias, Wikipedia, paginas descargadas y snippets.
+            ordered: List[Dict[str, Any]] = list(news_items)
+            if wiki:
+                ordered.append(wiki)
+            for result in results:
+                page = fetched.get(result["url"])
+                if page and page.get("text"):
+                    merged = dict(result)
+                    merged["text"] = page["text"]
+                    merged["title"] = page.get("title") or result.get("title") or result["url"]
+                    ordered.append(merged)
+                else:
+                    ordered.append(result)
+
+            seen = set()
+            final: List[Dict[str, Any]] = []
+            for source in ordered:
+                key = _url_key(source["url"])
+                if key in seen:
+                    continue
+                seen.add(key)
+                final.append(source)
+            sources = final[: max_results + 1]
+            kind = "news" if intent == "news" else "search"
 
     if not sources:
         return None
@@ -2401,7 +2600,6 @@ def gather_context(
         "context": context,
         "created": time.strftime("%Y-%m-%d %H:%M"),
     }
-
 
 def build_context_text(query: str, kind: str, sources: List[Dict[str, Any]]) -> str:
     """Construye el bloque de contexto que se inyecta en el prompt."""
