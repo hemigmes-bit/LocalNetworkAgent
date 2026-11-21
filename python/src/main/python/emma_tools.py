@@ -151,6 +151,177 @@ _TIME_RE = re.compile(
     re.IGNORECASE,
 )
 
+_DATE_CALC_RE = re.compile(
+    r"\b(?:qu[eé]\s+d[ií]a\s+(?:es|ser[aá]|caer[aá]|cae)\s+"
+    r"(?:el\s+)?\d{1,2}\s+(?:de\s+)?(?:enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|octubre|noviembre|diciembre|"
+    r"january|february|march|april|may|june|july|august|september|october|november|december)"
+    r"(?:\s+(?:de\s+)?\d{4})?|"
+    r"what\s+(?:day\s+(?:is|will\s+be)|day\s+of\s+week\s+(?:is|will\s+be))\s+"
+    r"(?:january|february|march|april|may|june|july|august|september|october|november|december)\s+\d{1,2}"
+    r"(?:st|nd|rd|th)?(?:\s+\d{4})?(?:\s+day\s+of\s+week)?|"
+    r"when\s+is\s+(?:january|february|march|april|may|june|july|august|september|october|november|december)\s+\d{1,2}"
+    r"(?:st|nd|rd|th)?(?:\s+\d{4})?|"
+    r"next\s+(?:january|february|march|april|may|june|july|august|september|october|november|december)\s+\d{1,2}"
+    r"(?:st|nd|rd|th)?\s+(?:what\s+day|day\s+of\s+week|will\s+be|which\s+day|day\s+will\s+be)|"
+    r"(?:when|what\s+day).+?(?:january|february|march|april|may|june|july|august|september|october|november|december)\s+\d{1,2}(?:st|nd|rd|th)?\s+next\s+year|"
+    r"(?:january|february|march|april|may|june|july|august|september|october|november|december)\s+\d{1,2}(?:st|nd|rd|th)?(?:\s+\d{4})?\s+day\s+of\s+week|"
+    r"qu[eé]\s+d[ií]a\s+(?:es|ser[aá]|caer[aá]|cae)\s+el\s+\d{1,2}\s+de\s+(?:enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|octubre|noviembre|diciembre)\s+de\s+\d{4}"
+    r")\b",
+    re.IGNORECASE,
+)
+
+_MONTHS_ES = {
+    "enero": 1, "febrero": 2, "marzo": 3, "abril": 4, "mayo": 5, "junio": 6,
+    "julio": 7, "agosto": 8, "septiembre": 9, "octubre": 10, "noviembre": 11, "diciembre": 12,
+}
+_MONTHS_EN = {
+    "january": 1, "february": 2, "march": 3, "april": 4, "may": 5, "june": 6,
+    "july": 7, "august": 8, "september": 9, "october": 10, "november": 11, "december": 12,
+}
+_MONTHS_ALL = {**_MONTHS_ES, **_MONTHS_EN}
+
+_DATE_PATTERNS = [
+    # YYYY-MM-DD
+    re.compile(r"\b(\d{4})-(\d{1,2})-(\d{1,2})\b"),
+    # DD/MM/YYYY or DD-MM-YYYY
+    re.compile(r"\b(\d{1,2})[/-](\d{1,2})[/-](\d{4})\b"),
+    # D de MES de YYYY / D de MES YYYY
+    re.compile(
+        r"\b(\d{1,2})\s+de\s+([a-záéíóú]+)\s+(?:de\s+)?(\d{4})\b", re.IGNORECASE
+    ),
+    # MES D, YYYY / MES D YYYY
+    re.compile(
+        r"\b([a-z]+)\s+(\d{1,2})(?:st|nd|rd|th)?,?\s+(\d{4})\b", re.IGNORECASE
+    ),
+    # "next MES D" or "MES D next year"
+    re.compile(
+        r"\bnext\s+([a-z]+)\s+(\d{1,2})(?:st|nd|rd|th)?\b", re.IGNORECASE
+    ),
+    # D MES (current/next year implied)
+    re.compile(
+        r"\b(\d{1,2})\s+(?:de\s+)?([a-záéíóú]+)\b", re.IGNORECASE
+    ),
+    # "when is MES D next year" / "what day is MES D next year"
+    re.compile(
+        r"(?:when|what day).+?\b([a-z]+)\s+(\d{1,2})(?:st|nd|rd|th)?\s+next\s+year\b", re.IGNORECASE
+    ),
+    # "MES D day of week" / "day of week MES D"
+    re.compile(
+        r"\b([a-z]+)\s+(\d{1,2})(?:st|nd|rd|th)?\s+day\s+of\s+week\b", re.IGNORECASE
+    ),
+    # Spanish: "que dia cae el D de MES de YYYY"
+    re.compile(
+        r"qu[eé]\s+d[ií]a\s+(?:es|ser[aá]|caer[aá])\s+el\s+(\d{1,2})\s+de\s+([a-záéíóú]+)\s+de\s+(\d{4})", re.IGNORECASE
+    ),
+]
+
+
+def _extract_date_from_text(text: str) -> Optional[str]:
+    """Extrae una fecha del texto y la normaliza a YYYY-MM-DD."""
+    from datetime import datetime, date
+    t = str(text or "").strip()
+    if not t:
+        return None
+
+    # Intentar patrones explícitos con año
+    for pattern in _DATE_PATTERNS[:4]:
+        m = pattern.search(t)
+        if m:
+            groups = m.groups()
+            if len(groups) == 3:
+                if pattern == _DATE_PATTERNS[0]:  # YYYY-MM-DD
+                    y, mth, d = groups
+                elif pattern == _DATE_PATTERNS[1]:  # DD/MM/YYYY
+                    d, mth, y = groups
+                elif pattern == _DATE_PATTERNS[2]:  # D de MES de YYYY
+                    d, mth_name, y = groups
+                    mth = _MONTHS_ALL.get(mth_name.lower())
+                    if not mth:
+                        continue
+                elif pattern == _DATE_PATTERNS[3]:  # MES D, YYYY
+                    mth_name, d, y = groups
+                    mth = _MONTHS_ALL.get(mth_name.lower())
+                    if not mth:
+                        continue
+                try:
+                    return f"{int(y):04d}-{int(mth):02d}-{int(d):02d}"
+                except (ValueError, TypeError):
+                    continue
+
+    # "next MES D" -> next occurrence of this month/day
+    m = _DATE_PATTERNS[4].search(t)
+    if m:
+        mth_name, d = m.groups()
+        mth = _MONTHS_ALL.get(mth_name.lower())
+        if mth:
+            now = datetime.now()
+            y = now.year
+            # "next MES" conventionally means the next occurrence.
+            # If we are in or past that month this year, next is next year.
+            if mth <= now.month:
+                y += 1
+            try:
+                return f"{y:04d}-{int(mth):02d}-{int(d):02d}"
+            except ValueError:
+                pass
+
+    # "D de MES" sin año -> asumir año actual o siguiente
+    m = _DATE_PATTERNS[5].search(t)
+    if m:
+        d, mth_name = m.groups()
+        mth = _MONTHS_ALL.get(mth_name.lower())
+        if mth:
+            now = datetime.now()
+            y = now.year
+            if mth < now.month or (mth == now.month and int(d) < now.day):
+                y += 1
+            try:
+                return f"{y:04d}-{int(mth):02d}-{int(d):02d}"
+            except ValueError:
+                pass
+
+    # "when is MES D next year" / "what day is MES D next year"
+    m = _DATE_PATTERNS[6].search(t)
+    if m:
+        mth_name, d = m.groups()
+        mth = _MONTHS_ALL.get(mth_name.lower())
+        if mth:
+            now = datetime.now()
+            y = now.year + 1  # next year
+            try:
+                return f"{y:04d}-{int(mth):02d}-{int(d):02d}"
+            except ValueError:
+                pass
+
+    # "MES D day of week" / "day of week MES D" (assume current or next year)
+    m = _DATE_PATTERNS[7].search(t)
+    if m:
+        mth_name, d = m.groups()
+        mth = _MONTHS_ALL.get(mth_name.lower())
+        if mth:
+            now = datetime.now()
+            y = now.year
+            if mth < now.month or (mth == now.month and int(d) < now.day):
+                y += 1
+            try:
+                return f"{y:04d}-{int(mth):02d}-{int(d):02d}"
+            except ValueError:
+                pass
+
+    # Spanish: "que dia cae el D de MES de YYYY"
+    m = _DATE_PATTERNS[8].search(t)
+    if m:
+        d, mth_name, y = m.groups()
+        mth = _MONTHS_ALL.get(mth_name.lower())
+        if mth:
+            try:
+                return f"{int(y):04d}-{int(mth):02d}-{int(d):02d}"
+            except (ValueError, TypeError):
+                pass
+
+    return None
+
+
 _MATH_FUNCS = {
     "sqrt": math.sqrt,
     "abs": abs,
@@ -159,6 +330,20 @@ _MATH_FUNCS = {
     "max": max,
 }
 
+def detect_local_intent(text: str) -> Optional[Dict[str, Any]]:
+    raw = str(text or "").strip()
+    if not raw:
+        return None
+    if _DATE_RE.search(raw) or _TIME_RE.search(raw):
+        return {"name": "current_date", "arguments": {}}
+    if _DATE_CALC_RE.search(raw):
+        date_str = _extract_date_from_text(raw)
+        if date_str:
+            return {"name": "date_calculate", "arguments": {"date": date_str}}
+    expression = _math_expression(raw)
+    if expression:
+        return {"name": "calculate", "arguments": {"expression": expression}}
+    return None
 
 def _normalize_math(expression: str) -> str:
     """Convierte una expresion natural sencilla en aritmetica segura.
@@ -296,12 +481,17 @@ def _format_result(value: float) -> str:
 
 
 def detect_local_intent(text: str) -> Optional[Dict[str, Any]]:
-    """Herramientas que no necesitan al modelo: calculo y fecha/hora."""
+    """Herramientas que no necesitan al modelo: calculo, fecha/hora y calculo de fechas."""
     raw = str(text or "").strip()
     if not raw:
         return None
     if _DATE_RE.search(raw) or _TIME_RE.search(raw):
         return {"name": "current_date", "arguments": {}}
+    if _DATE_CALC_RE.search(raw):
+        # Extraer la fecha de la pregunta
+        date_str = _extract_date_from_text(raw)
+        if date_str:
+            return {"name": "date_calculate", "arguments": {"date": date_str}}
     expression = _math_expression(raw)
     if expression:
         return {"name": "calculate", "arguments": {"expression": expression}}
@@ -365,6 +555,23 @@ TOOLS: List[Dict[str, Any]] = [
             "name": "current_date",
             "description": "Fecha y hora actuales del sistema. Usala para 'hoy', 'ayer', 'este ano' o la hora.",
             "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "date_calculate",
+            "description": "Calcula el dia de la semana para una fecha dada. Usala para 'que dia cae el 9 de enero de 2027' o 'what day is january 9 2027'.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "date": {
+                        "type": "string",
+                        "description": "Fecha en formato YYYY-MM-DD o DD/MM/YYYY o '9 de enero de 2027'.",
+                    },
+                },
+                "required": ["date"],
+            },
         },
     },
     {
@@ -513,6 +720,22 @@ def validate_arguments(name: str, args: Any) -> Tuple[Optional[Dict[str, Any]], 
             return {"expression": _arg_str(args, "expression", max_len=200)}, ""
         if name == "current_date":
             return {}, ""
+        if name == "date_calculate":
+            date_str = _arg_str(args, "date", max_len=50)
+            if not date_str:
+                return None, "falta el parametro date"
+            # Validar formato basico YYYY-MM-DD
+            import re
+            if not re.match(r"^\d{4}-\d{2}-\d{2}$", date_str):
+                return None, "formato de fecha invalido, use YYYY-MM-DD"
+            # Validar que es una fecha real
+            from datetime import date
+            try:
+                y, m, d = map(int, date_str.split("-"))
+                date(y, m, d)
+            except ValueError:
+                return None, "fecha invalida"
+            return {"date": date_str}, ""
         if name == "get_profile":
             return {}, ""
         if name == "get_due_reviews":
@@ -613,6 +836,11 @@ def tool_result_hint(used: Optional[List[str]] = None) -> str:
             "\n\nFECHA: el mensaje 'tool' trae la fecha y hora reales del "
             "sistema. Usalas tal cual; no inventes otra fecha."
         )
+    if "date_calculate" in used_set:
+        return (
+            "\n\nFECHA CALCULADA: el mensaje 'tool' trae el dia de la semana "
+            "exacto para la fecha pedida. Usa ese dia, no lo calcules mentalmente."
+        )
     if "fetch_page" in used_set:
         return TOOL_RESULT_HINT
     return TOOL_SEARCH_HINT
@@ -625,6 +853,8 @@ def tool_reinforcement(used: Optional[List[str]] = None) -> str:
         return "Responde con el resultado exacto de la herramienta, sin recalcular."
     if "current_date" in used_set:
         return "Responde con la fecha y hora del resultado, sin inventarlas."
+    if "date_calculate" in used_set:
+        return "Responde con el dia de la semana del resultado, sin inventarlo."
     if "fetch_page" in used_set:
         return TOOL_REINFORCE_PAGE
     return TOOL_REINFORCE_SEARCH
@@ -750,6 +980,9 @@ def _fallback_arguments(name: str, user_text: str, lang: str) -> Dict[str, Any]:
         return {"expression": expression} if expression else {}
     if name == "current_date":
         return {}
+    if name == "date_calculate":
+        date_str = _extract_date_from_text(user_text)
+        return {"date": date_str} if date_str else {}
     if name == "get_due_reviews":
         return {"limit": 3}
     if name == "search_sessions":
@@ -888,6 +1121,47 @@ def execute_tool(
                         f"Today is {weekdays_en[now.weekday()]}, "
                         f"{months_en[now.month - 1]} {now.day}, {now.year}, "
                         f"and it is {now.strftime('%H:%M')}."
+                    ),
+                },
+            }
+
+        if name == "date_calculate":
+            from datetime import date
+            date_str = args["date"]
+            y, m, d = map(int, date_str.split("-"))
+            target = date(y, m, d)
+            weekdays_es = (
+                "lunes", "martes", "miércoles", "jueves",
+                "viernes", "sábado", "domingo",
+            )
+            weekdays_en = (
+                "Monday", "Tuesday", "Wednesday", "Thursday",
+                "Friday", "Saturday", "Sunday",
+            )
+            months_es = (
+                "enero", "febrero", "marzo", "abril", "mayo", "junio",
+                "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre",
+            )
+            months_en = (
+                "January", "February", "March", "April", "May", "June",
+                "July", "August", "September", "October", "November", "December",
+            )
+            return {
+                "ok": True,
+                "result": {
+                    "date": date_str,
+                    "weekday_es": weekdays_es[target.weekday()],
+                    "weekday_en": weekdays_en[target.weekday()],
+                    "month_es": months_es[target.month - 1],
+                    "month_en": months_en[target.month - 1],
+                    "year": target.year,
+                    "spoken_es": (
+                        f"El {d} de {months_es[target.month - 1]} de {target.year} "
+                        f"cae en {weekdays_es[target.weekday()]}."
+                    ),
+                    "spoken_en": (
+                        f"{months_en[target.month - 1]} {d}, {target.year} "
+                        f"falls on a {weekdays_en[target.weekday()]}."
                     ),
                 },
             }
