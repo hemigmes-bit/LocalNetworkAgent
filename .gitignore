@@ -44,9 +44,9 @@ __pycache__/
 .pytest_cache/
 .coverage
 
-# Vite / pywebview
+# Vite / pywebview / Node
+node_modules/
 avatar/dist/
-avatar/node_modules/
 
 # Backup files (local only)
 *_backup_*/
