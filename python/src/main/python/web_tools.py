@@ -598,6 +598,9 @@ _NEWS_WORDS = (
     # Votos y decisiones de hoy
     "today's vote", "todays vote", "today vote", "vote today", "vote on",
     "votacion de hoy", "voto de hoy", "votacion hoy",
+    # Elecciones
+    "elecciones", "eleccion", "election", "elections",
+    "comicios", "votaciones", "polls",
 )
 _FACTUAL_PATTERNS = (
     # "que ha pasado hoy", "que ha ocurrido": la pregunta de actualidad mas
@@ -612,6 +615,12 @@ _FACTUAL_PATTERNS = (
     # Votos y decisiones de hoy
     r"\b(today['\s]?s?\s+vote|vote\s+today|vote\s+on)\b",
     r"\b(votaci[oó]n\s+(?:de\s+hoy|hoy)|voto\s+(?:de\s+hoy|hoy))\b",
+    # Elecciones
+    r"\belecciones?\b",
+    r"\belections?\b",
+    r"\bcomicios?\b",
+    r"\bgeneral\s+election\b",
+    r"\belecciones\s+generales\b",
     r"\bque es\b", r"\bque son\b", r"\bquien es\b", r"\bquienes son\b",
     r"\bcuando\b", r"\bdonde\b", r"\bcomo funciona\b", r"\bcuanto cuesta\b",
     r"\bcuanto vale\b", r"\bprecio de\b", r"\bprecio del\b", r"\bclima en\b",
@@ -793,6 +802,31 @@ def clean_query(text: str) -> str:
     q = re.sub(r"\s+", " ", q).strip()
     q = re.sub(r"^(el|la|los|las|the)\s+", "", q, flags=re.IGNORECASE)
     q = q.strip(" ,.;:¿?¡!")
+    
+    # Consultas compuestas: "what day is today and when is the election in spain"
+    # Dividir en partes por conjunciones y quedarse con la parte mas informativa.
+    parts = re.split(r"\s+(?:and|y|e|pero|but)\s+", q, flags=re.IGNORECASE)
+    if len(parts) > 1:
+        # Filtrar partes que son solo muletillas de fecha/hora
+        meaningful = []
+        for part in parts:
+            part = part.strip()
+            if not part:
+                continue
+            # Si la parte es solo una pregunta de fecha/hora, la descartamos
+            # porque ya se resuelve con current_date tool.
+            if re.match(
+                r"^(?:what\s+(?:day|date)\s+is\s+(?:it|today)?|"
+                r"qu[eé]\s+(?:d[ií]a|fecha)\s+es\s+hoy|"
+                r"fecha\s+de\s+hoy|d[ií]a\s+de\s+hoy)\s*$",
+                part,
+                re.IGNORECASE,
+            ):
+                continue
+            meaningful.append(part)
+        if meaningful:
+            q = " ".join(meaningful)
+    
     return q or text.strip()
 
 

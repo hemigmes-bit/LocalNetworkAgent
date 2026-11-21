@@ -141,7 +141,8 @@ _MATH_PREFIX_RE = re.compile(
 _DATE_RE = re.compile(
     r"\b(?:qu[eé]\s+d[ií]a\s+es\s+hoy|qu[eé]\s+fecha\s+es\s+hoy|"
     r"fecha\s+de\s+hoy|d[ií]a\s+de\s+hoy|"
-    r"what\s+day\s+is\s+(?:it|today)|what(?:'s|\s+is)\s+the\s+date(?:\s+today)?)\b",
+    r"what\s+day\s+is\s+(?:it|today)|what(?:'s|\s+is)\s+the\s+date(?:\s+today)?|"
+    r"what\s+date\s+is\s+(?:it|today)?)\b",
     re.IGNORECASE,
 )
 
@@ -971,16 +972,19 @@ def gather_tool_context(
     # Calculo y fecha se resuelven sin llamar al modelo: son deterministas y
     # no deben depender de que un 9B acierte con la aritmetica.
     local = detect_local_intent(user_text)
+    calls = []
     if local:
-        calls = [{
+        calls.append({
             "function": {
                 "name": local["name"],
                 "arguments": local["arguments"],
             }
-        }]
-    else:
-        calls = select_tool_calls(user_text, lang, model, url, num_ctx, timeout)
+        })
 
+    # Ademas de la herramienta local, si el turno pide busqueda web,
+    # la anadimos (ej: "what day is today AND when is the election in spain").
+    needs_web = needs_tools(user_text) and (not local or tool_hint(user_text) == "web")
+    if needs_web:
         # Seguimiento ("cuentame mas", "tell me more", "who can access..."):
         # reutiliza el tema de la ultima busqueda web para ampliar con datos
         # nuevos, en vez de buscar la frase literal y quedarse sin contexto.
@@ -998,6 +1002,40 @@ def gather_tool_context(
                 if len(word) > 4
             ][:3]
             query = " ".join([_LAST_WEB_QUERY] + extra).strip()
+            calls.append({
+                "function": {
+                    "name": "web_search",
+                    "arguments": {"query": query, "lang": lang},
+                }
+            })
+        else:
+            calls.append({
+                "function": {
+                    "name": "web_search",
+                    "arguments": {
+                        "query": web_tools.clean_query(user_text) or _clean(user_text),
+                        "lang": lang,
+                    },
+                }
+            })
+
+    # Si no hay local ni web pero el modelo deberia elegir, pedimos al modelo.
+    if not calls:
+        calls = select_tool_calls(user_text, lang, model, url, num_ctx, timeout)
+
+        # Seguimiento...
+        reuse_query = needs_followup(user_text)
+        query = ""
+
+        if reuse_query:
+            extra = [
+                word
+                for word in sorted(
+                    _significant_words(user_text) - _significant_words(_LAST_WEB_QUERY)
+                )
+                if len(word) > 4
+            ][:3]
+            query = " ".join([_LAST_WEB_QUERY] + extra).strip()
             calls = [{
                 "function": {
                     "name": "web_search",
@@ -1005,8 +1043,7 @@ def gather_tool_context(
                 }
             }]
 
-        # Si el modelo no llama ninguna herramienta pero el turno lo pide, se
-        # ejecuta la herramienta adecuada directamente para no perder la capacidad.
+        # Si el modelo no llama ninguna herramienta pero el turno lo pide...
         if not calls and needs_tools(user_text):
             hint = tool_hint(user_text)
             if hint == "memory":
