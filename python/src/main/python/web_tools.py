@@ -591,8 +591,21 @@ _SEARCH_VERBS = (
 )
 _NEWS_WORDS = (
     "noticia", "noticias", "ultima hora", "ultimas noticias", "actualidad", "news",
+    "novedades", "current events",
+    # Preguntas de actualidad sin la palabra "noticias".
+    "que ha pasado", "que ha ocurrido", "what happened",
+    "what is happening", "what's happening",
 )
 _FACTUAL_PATTERNS = (
+    # "que ha pasado hoy", "que ha ocurrido": la pregunta de actualidad mas
+    # natural no decia "noticias" ni "pasa" (que no coincide con "pasado").
+    r"\bque\s+(ha|han)\s+pasado\b",
+    r"\bque\s+(ha|han)\s+ocurrido\b",
+    r"\bque\s+(esta|estan)\s+pasando\b",
+    r"\bha\s+pasado\s+(hoy|esta\s+semana|en)\b",
+    r"\bwhat\s+(has|have)\s+happened\b",
+    r"\bwhat\s+happened\b",
+    r"\bwhat(?:'s|\s+is|\s+are)?\s+happening\b",
     r"\bque es\b", r"\bque son\b", r"\bquien es\b", r"\bquienes son\b",
     r"\bcuando\b", r"\bdonde\b", r"\bcomo funciona\b", r"\bcuanto cuesta\b",
     r"\bcuanto vale\b", r"\bprecio de\b", r"\bprecio del\b", r"\bclima en\b",
@@ -724,7 +737,15 @@ def clean_query(text: str) -> str:
     'y donde nacio' -> 'donde nacio' (se completa luego con el turno previo)
     """
     q = normalize_spoken_urls(text)
-    q = re.sub(r"^(oye|emma|por favor)[,\s]+", "", q, flags=re.IGNORECASE)
+    # Saludo + wake word: "Hola Emma, que ha pasado..." hacia que Bing
+    # devolviera la revista HOLA en vez de noticias.
+    q = re.sub(
+        r"^(?:(?:hola|buenas|buenos\s+d[ií]as|buenas\s+tardes|buenas\s+noches|"
+        r"hey|oye|emma|por\s+favor)\b[,\s]*)+",
+        "",
+        q,
+        flags=re.IGNORECASE,
+    )
     q = re.sub(
         r"^\s*(busca|buscame|búscame|buscar|search|look up|investiga|consulta|"
         r"mira|lee|abre|entra)\b",
@@ -767,6 +788,51 @@ def clean_query(text: str) -> str:
     q = re.sub(r"^(el|la|los|las|the)\s+", "", q, flags=re.IGNORECASE)
     q = q.strip(" ,.;:¿?¡!")
     return q or text.strip()
+
+
+# Formulas de pregunta de actualidad que no aportan nada al buscador.
+_NEWS_STEM_RE = re.compile(
+    r"\b(?:que\s+(?:ha|han)\s+(?:pasado|ocurrido)|"
+    r"que\s+(?:esta|estan)\s+pasando|"
+    r"que\s+noticias\s+(?:hay|tenemos)|"
+    r"que\s+hay\s+de\s+nuevo|"
+    r"cuales\s+son\s+las\s+noticias|"
+    r"what(?:'s|\s+is|\s+has|\s+have)?\s*(?:happened|happening)|"
+    r"what(?:'s|\s+is)?\s+new|latest\s+news|current\s+events)\b",
+    re.IGNORECASE,
+)
+_NEWS_TIME_RE = re.compile(
+    r"\b(?:hoy|esta\s+semana|estos\s+dias|ultimamente|"
+    r"today|this\s+week|right\s+now)\b",
+    re.IGNORECASE,
+)
+_NEWS_WORD_RE = re.compile(
+    r"\b(?:noticias?|news|novedades|actualidad|ultima\s+hora)\b",
+    re.IGNORECASE,
+)
+
+
+def news_query(text: str, lang: str = "es") -> str:
+    """Convierte una pregunta de actualidad en una consulta de noticias.
+
+    Los buscadores responden mejor a "España noticias hoy" que a la pregunta
+    literal "que ha pasado hoy en España", que devuelve articulos de opinion
+    y hasta la revista HOLA. Es idempotente: una consulta ya normalizada no
+    cambia.
+    """
+    q = clean_query(text)
+    q = _NEWS_STEM_RE.sub(" ", q)
+    q = _NEWS_WORD_RE.sub(" ", q)
+    q = _NEWS_TIME_RE.sub(" ", q)
+    q = re.sub(
+        r"^(?:(?:sobre|de|del|en|acerca\s+de|about|in|on)\s+)+",
+        "",
+        q.strip(),
+        flags=re.IGNORECASE,
+    )
+    q = re.sub(r"\s+", " ", q).strip(" ,.;:¿?¡!")
+    suffix = "news today" if str(lang).lower() == "en" else "noticias hoy"
+    return f"{q} {suffix}".strip() if q else suffix
 
 
 def _wants_wikipedia(text: str) -> bool:
@@ -2122,7 +2188,10 @@ def gather_context(
         query = urls[0] if urls else text
         kind = "url"
     else:
-        query = clean_query(text)
+        if intent == "news":
+            query = news_query(text, lang)
+        else:
+            query = clean_query(text)
         query = _merge_followup(query, clean_query(previous))
 
         news_items: List[Dict[str, Any]] = []

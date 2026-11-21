@@ -112,8 +112,13 @@ def _number_variants(raw: str) -> List[float]:
     # Todos los separadores son de miles: 1.200.000 / 1,200,000.
     # Es el patron inequivoco en espanol e ingles; no se anade la lectura
     # decimal para no dar por buena una cifra mil veces mayor.
+    # EXCEPCION: 1 digito + 3 decimales (ej: 1,595) tipico de precios.
     if re.fullmatch(r"\d{1,3}(?:[.,]\d{3})+", raw):
         add(int(re.sub(r"[.,]", "", raw)))
+        # Si es 1 digito seguido de grupos de 3, anadir lectura decimal.
+        if re.fullmatch(r"\d[.,]\d{3}", raw):
+            integer, decimal = raw.split(raw[1], 1)[0], raw.split(raw[1], 1)[1].replace(".", "").replace(",", "")
+            add(float(integer + "." + decimal))
         return values
 
     # Varios separadores con decimal final: 1.200,5 / 1,200.5
@@ -125,9 +130,18 @@ def _number_variants(raw: str) -> List[float]:
     # Un unico separador: decimal o miles.
     match = re.fullmatch(r"(\d+)[.,](\d+)", raw)
     if match:
-        add(float(match.group(1) + "." + match.group(2)))
-        if len(match.group(2)) == 3:
-            add(float(match.group(1) + match.group(2)))
+        integer_part = match.group(1)
+        decimal_part = match.group(2)
+        # Si la parte entera es 1 digito y la decimal tiene 3 digitos,
+        # es probable que sea un precio con 3 decimales (ej: 1,595 euros)
+        # Añadimos AMBAS lecturas para cubrir ambos casos.
+        if len(integer_part) == 1 and len(decimal_part) == 3:
+            add(float(integer_part + "." + decimal_part))  # 1.595
+            add(float(integer_part + decimal_part))        # 1595
+        else:
+            add(float(integer_part + "." + decimal_part))  # decimal
+            if len(decimal_part) == 3:
+                add(float(integer_part + decimal_part))    # miles
 
     if not values:
         add(int(re.sub(r"[.,]", "", raw)))
@@ -172,7 +186,13 @@ def extract_claims(text: str) -> List[Claim]:
         if not base:
             continue
         multiplier = _SCALES.get(scale, 1.0)
-        values = tuple(round(value * multiplier, 6) for value in base)
+        # Si hay escala (millones, millardos, etc.), solo usar la interpretacion
+        # de miles (base[0]) para no crear falsos positivos como "1.200 millones"
+        # = 1,2 millones coincidiendo con "1.200.000".
+        if multiplier > 1.0:
+            values = (round(base[0] * multiplier, 6),)
+        else:
+            values = tuple(round(value * multiplier, 6) for value in base)
         kind = _claim_kind(num, scale, unit, base)
         if not kind:
             continue
@@ -206,7 +226,9 @@ def _context_values(context: str) -> Set[float]:
 
 
 def _matches(value: float, pool: Iterable[float]) -> bool:
-    tolerance = max(1e-6, abs(value) * 5e-4)
+    # Tolerancia relativa 1% para permitir redondeos razonables.
+    # Suelo absoluto de 0.01 para cifras pequenas (precios).
+    tolerance = max(1e-6, abs(value) * 1e-2, 0.01)
     return any(abs(value - known) <= tolerance for known in pool)
 
 
