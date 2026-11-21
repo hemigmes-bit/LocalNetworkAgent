@@ -24,10 +24,13 @@ Se puede probar por separado:
 
 from __future__ import annotations
 
+import ast
 import json
+import math
 import re
 import time
 import urllib.request
+from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
 import emma_memory
@@ -118,7 +121,187 @@ def needs_followup(text: str) -> bool:
 
 def should_consult(text: str) -> bool:
     """Decide si el turno debe pagar la llamada de herramientas."""
-    return needs_tools(text) or needs_followup(text)
+    return needs_tools(text) or needs_followup(text) or bool(detect_local_intent(text))
+
+
+# ---------------------------------------------------------------------------
+# Herramientas deterministas (sin modelo): calculo y fecha
+# ---------------------------------------------------------------------------
+
+_MATH_PREFIX_RE = re.compile(
+    r"^\s*(?:emma[,\s]+)?"
+    r"(?:cu[aá]nto(?:s)?\s+(?:es|son|vale|da)|qu[eé]\s+es|what(?:'s| is)|"
+    r"how much is|calcula|calculate|resuelve|compute)\s+",
+    re.IGNORECASE,
+)
+
+_DATE_RE = re.compile(
+    r"\b(?:qu[eé]\s+d[ií]a\s+es\s+hoy|qu[eé]\s+fecha\s+es\s+hoy|"
+    r"fecha\s+de\s+hoy|d[ií]a\s+de\s+hoy|"
+    r"what\s+day\s+is\s+(?:it|today)|what(?:'s|\s+is)\s+the\s+date(?:\s+today)?)\b",
+    re.IGNORECASE,
+)
+
+_TIME_RE = re.compile(
+    r"\b(?:qu[eé]\s+hora\s+es|hora\s+actual|what\s+time\s+is\s+it|current\s+time)\b",
+    re.IGNORECASE,
+)
+
+_MATH_FUNCS = {
+    "sqrt": math.sqrt,
+    "abs": abs,
+    "round": round,
+    "min": min,
+    "max": max,
+}
+
+
+def _normalize_math(expression: str) -> str:
+    """Convierte una expresion natural sencilla en aritmetica segura.
+
+    Acepta ``23 x 17``, ``15% de 200``, ``2 elevado a 10`` o ``10 entre 4``.
+    Devuelve ``""`` si quedan letras o no hay ninguna operacion.
+    """
+    expr = str(expression or "").strip().rstrip("?.!¡¿ ")
+    expr = _MATH_PREFIX_RE.sub("", expr).strip()
+    if not expr:
+        return ""
+
+    # 15% de 200 -> (15/100)*200
+    expr = re.sub(
+        r"(?<=\d)\s*%\s*de\s*(?=\d)", "/100*", expr, flags=re.IGNORECASE
+    )
+    # La coma es decimal salvo dentro de min()/max()/round(), donde separa
+    # argumentos. En ese caso se deja tal cual.
+    if not re.search(r"\b(?:sqrt|abs|round|min|max)\s*\(", expr, re.IGNORECASE):
+        expr = re.sub(r"(?<=\d),(?=\d)", ".", expr)
+    expr = expr.replace("×", "*").replace("÷", "/").replace("^", "**")
+    expr = re.sub(r"(?<=\d)\s*[xX]\s*(?=\d)", "*", expr)
+
+    replacements = (
+        (r"\bdividido\s+(?:entre|por)\b", "/"),
+        (r"\bdivided\s+by\b", "/"),
+        (r"\belevado\s+(?:a|al)\b", "**"),
+        (r"\bto\s+the\s+power\s+of\b", "**"),
+        (r"\bpor\s+ciento\s+de\b", "/100*"),
+        (r"\bpercent\s+of\b", "/100*"),
+        (r"\bmultiplicado\s+por\b", "*"),
+        (r"\bmultiplied\s+by\b", "*"),
+        (r"\btimes\b", "*"),
+        (r"\bpor\b", "*"),
+        (r"\bm[aá]s\b", "+"),
+        (r"\bplus\b", "+"),
+        (r"\bmenos\b", "-"),
+        (r"\bminus\b", "-"),
+        (r"\bentre\b", "/"),
+    )
+    for pattern, replacement in replacements:
+        expr = re.sub(pattern, replacement, expr, flags=re.IGNORECASE)
+
+    expr = re.sub(r"\s+", "", expr)
+    expr = expr.replace("%", "/100")
+
+    # Se permiten las funciones conocidas; el resto de letras invalida.
+    probe = re.sub(r"\b(?:sqrt|abs|round|min|max)\b", "", expr, flags=re.IGNORECASE)
+    if not re.fullmatch(r"[0-9.+\-*/(),]+", probe):
+        return ""
+    if not re.search(r"[+\-*/]", expr) and not re.search(
+        r"\b(?:sqrt|abs|round|min|max)\s*\(", expr, re.IGNORECASE
+    ):
+        return ""
+    return expr
+
+
+def _math_expression(text: str) -> str:
+    """Extrae una expresion aritmetica de una pregunta, o ``""``."""
+    candidate = str(text or "").strip().rstrip("?.!¡¿ ")
+    candidate = candidate.lstrip("¿¡ ")
+    candidate = re.sub(r"^(?:emma[,\s]+)", "", candidate, flags=re.IGNORECASE).strip()
+    stripped = _MATH_PREFIX_RE.sub("", candidate).strip()
+    stripped = re.sub(r"^(?:la\s+)", "", stripped, flags=re.IGNORECASE)
+
+    root = re.fullmatch(
+        r"(?:ra[ií]z\s+cuadrada\s+de|square\s+root\s+of)\s+"
+        r"(\d+(?:[.,]\d+)?)",
+        stripped,
+        re.IGNORECASE,
+    )
+    if root:
+        return f"sqrt({root.group(1).replace(',', '.')})"
+
+    percent = re.fullmatch(
+        r"(?:el\s+)?(\d+(?:[.,]\d+)?)\s*(?:%|por\s+ciento|percent)"
+        r"\s+de\s+(\d+(?:[.,]\d+)?)",
+        stripped,
+        re.IGNORECASE,
+    )
+    if percent:
+        left = percent.group(1).replace(",", ".")
+        right = percent.group(2).replace(",", ".")
+        return f"({left}/100)*{right}"
+
+    return _normalize_math(candidate)
+
+
+class _MathValidator(ast.NodeVisitor):
+    """Solo permite aritmetica y las funciones de ``_MATH_FUNCS``."""
+
+    def visit_Constant(self, node: ast.Constant) -> None:
+        if not isinstance(node.value, (int, float)):
+            raise ValueError("constante no numerica")
+
+    def visit_Name(self, node: ast.Name) -> None:
+        if node.id not in _MATH_FUNCS:
+            raise ValueError(f"nombre no permitido: {node.id}")
+
+    def visit_Call(self, node: ast.Call) -> None:
+        if not isinstance(node.func, ast.Name) or node.func.id not in _MATH_FUNCS:
+            raise ValueError("funcion no permitida")
+        self.generic_visit(node)
+
+    def visit_BinOp(self, node: ast.BinOp) -> None:
+        if isinstance(node.op, ast.Pow) and isinstance(node.right, ast.Constant):
+            try:
+                if abs(float(node.right.value)) > 100:
+                    raise ValueError("exponente demasiado grande")
+            except (TypeError, ValueError):
+                raise ValueError("exponente invalido")
+        self.generic_visit(node)
+
+
+def _safe_eval(expression: str) -> float:
+    if len(expression) > 200:
+        raise ValueError("expresion demasiado larga")
+    tree = ast.parse(expression, mode="eval")
+    _MathValidator().visit(tree)
+    value = eval(  # noqa: S307 - AST validado y sin builtins
+        compile(tree, "<calculate>", "eval"),
+        {"__builtins__": {}},
+        dict(_MATH_FUNCS),
+    )
+    number = float(value)
+    if not math.isfinite(number):
+        raise ValueError("resultado no finito")
+    return number
+
+
+def _format_result(value: float) -> str:
+    if abs(value - round(value)) < 1e-9:
+        return str(int(round(value)))
+    return f"{value:.10f}".rstrip("0").rstrip(".")
+
+
+def detect_local_intent(text: str) -> Optional[Dict[str, Any]]:
+    """Herramientas que no necesitan al modelo: calculo y fecha/hora."""
+    raw = str(text or "").strip()
+    if not raw:
+        return None
+    if _DATE_RE.search(raw) or _TIME_RE.search(raw):
+        return {"name": "current_date", "arguments": {}}
+    expression = _math_expression(raw)
+    if expression:
+        return {"name": "calculate", "arguments": {"expression": expression}}
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -153,6 +336,31 @@ TOOLS: List[Dict[str, Any]] = [
                 },
                 "required": ["url"],
             },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "calculate",
+            "description": "Calcula una operacion aritmetica exacta (sumas, porcentajes, potencias, raices).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "expression": {
+                        "type": "string",
+                        "description": "Expresion como '(1200*0.21)+50' o '15/100*200'.",
+                    },
+                },
+                "required": ["expression"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "current_date",
+            "description": "Fecha y hora actuales del sistema. Usala para 'hoy', 'ayer', 'este ano' o la hora.",
+            "parameters": {"type": "object", "properties": {}},
         },
     },
     {
@@ -214,9 +422,10 @@ _TOOL_NAMES = {tool["function"]["name"] for tool in TOOLS}
 SELECTION_SYSTEM = (
     "Eres Emma, una profesora bilingue. Decide si necesitas una herramienta. "
     "Usa web_search para noticias, datos actuales o temas externos; fetch_page "
-    "solo si el usuario da una URL; las herramientas de memoria solo si pregunta "
-    "por su perfil, sus repasos o conversaciones pasadas. Si no hace falta "
-    "ninguna, responde con una frase normal y NO llames herramientas. "
+    "solo si el usuario da una URL; calculate para operaciones aritmeticas y "
+    "current_date para la fecha u hora; las herramientas de memoria solo si "
+    "pregunta por su perfil, sus repasos o conversaciones pasadas. Si no hace "
+    "falta ninguna, responde con una frase normal y NO llames herramientas. "
     "No inventes datos: si no lo sabes, usa web_search."
 )
 
@@ -296,6 +505,10 @@ def validate_arguments(name: str, args: Any) -> Tuple[Optional[Dict[str, Any]], 
             }, ""
         if name == "fetch_page":
             return {"url": _arg_url(args)}, ""
+        if name == "calculate":
+            return {"expression": _arg_str(args, "expression", max_len=200)}, ""
+        if name == "current_date":
+            return {}, ""
         if name == "get_profile":
             return {}, ""
         if name == "get_due_reviews":
@@ -359,8 +572,8 @@ TOOL_RESULT_HINT = (
     "datos que no aparezcan ahi. Si el usuario pide leer o resumir una pagina, "
     "EMPIEZA por el dato mas importante del texto (quien, que, donde, cuando) y "
     "sigue con 2 o 3 frases de detalle. No empieces con 'He leido' ni "
-    "'He consultado': cuenta directamente lo que dice. Si falta el dato, dilo "
-    "con honestidad."
+    "'He consultado': cuenta directamente lo que dice. Menciona la fuente una "
+    "vez, de forma natural ('segun El Pais'). Si falta el dato, dilo con honestidad."
 )
 
 TOOL_SEARCH_HINT = (
@@ -369,6 +582,7 @@ TOOL_SEARCH_HINT = (
     "fuente principal, no digas que no tienes acceso a internet y no inventes "
     "datos que no aparezcan ahi. Di lo que cuentan los titulares o fragmentos "
     "con 1 o 2 datos concretos (nombres, cifras, fechas) en 2-4 frases. "
+    "Menciona la fuente una vez, de forma natural ('segun El Pais'). "
     "Si falta el dato, dilo con honestidad."
 )
 
@@ -384,14 +598,30 @@ TOOL_REINFORCE_SEARCH = (
 
 def tool_result_hint(used: Optional[List[str]] = None) -> str:
     """Hint segun la herramienta: leer una pagina exige resumir su contenido."""
-    if "fetch_page" in set(used or []):
+    used_set = set(used or [])
+    if "calculate" in used_set:
+        return (
+            "\n\nCALCULO: el mensaje 'tool' trae el resultado exacto de una "
+            "operacion. Usa esa cifra tal cual, no la recalcules de memoria."
+        )
+    if "current_date" in used_set:
+        return (
+            "\n\nFECHA: el mensaje 'tool' trae la fecha y hora reales del "
+            "sistema. Usalas tal cual; no inventes otra fecha."
+        )
+    if "fetch_page" in used_set:
         return TOOL_RESULT_HINT
     return TOOL_SEARCH_HINT
 
 
 def tool_reinforcement(used: Optional[List[str]] = None) -> str:
     """Recordatorio corto pegado al final: los modelos pequenos lo obedecen mejor."""
-    if "fetch_page" in set(used or []):
+    used_set = set(used or [])
+    if "calculate" in used_set:
+        return "Responde con el resultado exacto de la herramienta, sin recalcular."
+    if "current_date" in used_set:
+        return "Responde con la fecha y hora del resultado, sin inventarlas."
+    if "fetch_page" in used_set:
         return TOOL_REINFORCE_PAGE
     return TOOL_REINFORCE_SEARCH
 
@@ -413,7 +643,7 @@ def tool_hint(text: str) -> str:
 
 def needs_tools(text: str) -> bool:
     """Solo los turnos que pueden necesitar la web o la memoria pagan la llamada extra."""
-    return bool(tool_hint(text))
+    return bool(tool_hint(text)) or bool(detect_local_intent(text))
 
 
 def select_tool_calls(
@@ -511,6 +741,11 @@ def _fallback_arguments(name: str, user_text: str, lang: str) -> Dict[str, Any]:
     if name == "fetch_page":
         urls = web_tools.extract_urls(user_text)
         return {"url": urls[0]} if urls else {}
+    if name == "calculate":
+        expression = _math_expression(user_text)
+        return {"expression": expression} if expression else {}
+    if name == "current_date":
+        return {}
     if name == "get_due_reviews":
         return {"limit": 3}
     if name == "search_sessions":
@@ -594,6 +829,65 @@ def execute_tool(
                 return {"ok": False, "error": page["error"], "result": page}
             return {"ok": True, "result": page}
 
+        if name == "calculate":
+            expression = _normalize_math(str(args.get("expression") or ""))
+            if not expression:
+                return {"ok": False, "error": "expresion no valida"}
+            try:
+                value = _safe_eval(expression)
+            except Exception as exc:
+                return {"ok": False, "error": f"no se pudo calcular: {exc}"}
+            return {
+                "ok": True,
+                "result": {
+                    "expression": expression,
+                    "value": value,
+                    "formatted": _format_result(value),
+                },
+            }
+
+        if name == "current_date":
+            now = datetime.now()
+            weekdays_es = (
+                "lunes", "martes", "miércoles", "jueves",
+                "viernes", "sábado", "domingo",
+            )
+            months_es = (
+                "enero", "febrero", "marzo", "abril", "mayo", "junio",
+                "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre",
+            )
+            weekdays_en = (
+                "Monday", "Tuesday", "Wednesday", "Thursday",
+                "Friday", "Saturday", "Sunday",
+            )
+            months_en = (
+                "January", "February", "March", "April", "May", "June",
+                "July", "August", "September", "October", "November", "December",
+            )
+            return {
+                "ok": True,
+                "result": {
+                    "iso": now.isoformat(timespec="seconds"),
+                    "date": now.strftime("%Y-%m-%d"),
+                    "time": now.strftime("%H:%M"),
+                    "weekday_es": weekdays_es[now.weekday()],
+                    "weekday_en": weekdays_en[now.weekday()],
+                    "month_es": months_es[now.month - 1],
+                    "month_en": months_en[now.month - 1],
+                    "year": now.year,
+                    "spoken_es": (
+                        f"Hoy es {weekdays_es[now.weekday()]}, {now.day} de "
+                        f"{months_es[now.month - 1]} de {now.year}, y son las "
+                        f"{now.strftime('%H:%M')}."
+                    ),
+                    "spoken_en": (
+                        f"Today is {weekdays_en[now.weekday()]}, "
+                        f"{months_en[now.month - 1]} {now.day}, {now.year}, "
+                        f"and it is {now.strftime('%H:%M')}."
+                    ),
+                },
+            }
+
         # Memoria: reutiliza la validacion existente.
         result = emma_memory.execute_tool(name, args)
         return result
@@ -640,6 +934,13 @@ def _compact_result(name: str, result: Dict[str, Any], limit: int) -> str:
         text = "\n".join(lines)
     elif name == "fetch_page":
         text = f"{data.get('title') or data.get('site')}: {data.get('text') or data.get('snippet') or ''}"
+    elif name == "calculate":
+        text = f"{data.get('expression')} = {data.get('formatted')}"
+    elif name == "current_date":
+        text = (
+            f"{data.get('spoken_es')} ({data.get('iso')}). "
+            f"{data.get('spoken_en')}"
+        )
     else:
         text = json.dumps(data, ensure_ascii=False)
     return text[:limit]
@@ -664,56 +965,67 @@ def gather_tool_context(
       ``sources``: fuentes web para la UI (enlaces clicables).
       ``used``: nombres de herramientas ejecutadas.
     """
-    calls = select_tool_calls(user_text, lang, model, url, num_ctx, timeout)
-
-    # Seguimiento ("cuentame mas", "tell me more", "who can access..."):
-    # reutiliza el tema de la ultima busqueda web para ampliar con datos
-    # nuevos, en vez de buscar la frase literal y quedarse sin contexto.
-    reuse_query = needs_followup(user_text)
-    query = ""
-
-    if reuse_query:
-        # El tema anterior manda; las palabras nuevas ("access", "history")
-        # añaden otra cara del mismo asunto para no devolver lo mismo.
-        extra = [
-            word
-            for word in sorted(
-                _significant_words(user_text) - _significant_words(_LAST_WEB_QUERY)
-            )
-            if len(word) > 4
-        ][:3]
-        query = " ".join([_LAST_WEB_QUERY] + extra).strip()
+    # Calculo y fecha se resuelven sin llamar al modelo: son deterministas y
+    # no deben depender de que un 9B acierte con la aritmetica.
+    local = detect_local_intent(user_text)
+    if local:
         calls = [{
             "function": {
-                "name": "web_search",
-                "arguments": {"query": query, "lang": lang},
+                "name": local["name"],
+                "arguments": local["arguments"],
             }
         }]
+    else:
+        calls = select_tool_calls(user_text, lang, model, url, num_ctx, timeout)
 
-    # Si el modelo no llama ninguna herramienta pero el turno lo pide, se
-    # ejecuta la herramienta adecuada directamente para no perder la capacidad.
-    if not calls and needs_tools(user_text):
-        hint = tool_hint(user_text)
-        if hint == "memory":
-            calls = [{
-                "function": {
-                    "name": "search_sessions",
-                    "arguments": {
-                        "query": web_tools.clean_query(user_text) or _clean(user_text),
-                        "limit": 2,
-                    },
-                }
-            }]
-        else:
+        # Seguimiento ("cuentame mas", "tell me more", "who can access..."):
+        # reutiliza el tema de la ultima busqueda web para ampliar con datos
+        # nuevos, en vez de buscar la frase literal y quedarse sin contexto.
+        reuse_query = needs_followup(user_text)
+        query = ""
+
+        if reuse_query:
+            # El tema anterior manda; las palabras nuevas ("access", "history")
+            # añaden otra cara del mismo asunto para no devolver lo mismo.
+            extra = [
+                word
+                for word in sorted(
+                    _significant_words(user_text) - _significant_words(_LAST_WEB_QUERY)
+                )
+                if len(word) > 4
+            ][:3]
+            query = " ".join([_LAST_WEB_QUERY] + extra).strip()
             calls = [{
                 "function": {
                     "name": "web_search",
-                    "arguments": {
-                        "query": web_tools.clean_query(user_text) or _clean(user_text),
-                        "lang": lang,
-                    },
+                    "arguments": {"query": query, "lang": lang},
                 }
             }]
+
+        # Si el modelo no llama ninguna herramienta pero el turno lo pide, se
+        # ejecuta la herramienta adecuada directamente para no perder la capacidad.
+        if not calls and needs_tools(user_text):
+            hint = tool_hint(user_text)
+            if hint == "memory":
+                calls = [{
+                    "function": {
+                        "name": "search_sessions",
+                        "arguments": {
+                            "query": web_tools.clean_query(user_text) or _clean(user_text),
+                            "limit": 2,
+                        },
+                    }
+                }]
+            else:
+                calls = [{
+                    "function": {
+                        "name": "web_search",
+                        "arguments": {
+                            "query": web_tools.clean_query(user_text) or _clean(user_text),
+                            "lang": lang,
+                        },
+                    }
+                }]
 
     sources: List[Dict[str, Any]] = []
     used: List[str] = []
@@ -824,6 +1136,14 @@ def _selftest() -> None:
     assert validate_arguments("web_search", '{"query": "Dune"}')[0]["query"] == "Dune"
     assert needs_tools("Busca noticias de Espana")
     assert not needs_tools("Hola Emma, como estas?")
+    assert _normalize_math("23 x 17") == "23*17"
+    assert detect_local_intent("cuanto es 15% de 200")["arguments"]["expression"] == "(15/100)*200"
+    assert execute_tool("calculate", {"expression": "(15/100)*200"})["result"]["formatted"] == "30"
+    assert execute_tool("calculate", {"expression": "sqrt(144)"})["result"]["formatted"] == "12"
+    assert detect_local_intent("que dia es hoy")["name"] == "current_date"
+    assert detect_local_intent("what time is it")["name"] == "current_date"
+    assert needs_tools("cuanto es 2+2")
+    assert execute_tool("calculate", {"expression": "__import__('os')"})["ok"] is False
     print("SELFTEST OK")
 
 

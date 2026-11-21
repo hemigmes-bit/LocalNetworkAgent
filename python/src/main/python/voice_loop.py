@@ -78,6 +78,8 @@ from collections import deque
 
 from dataclasses import dataclass, asdict, field
 
+from datetime import datetime
+
 # Prevenir salvapantallas/suspensión en Windows durante conversación activa
 try:
     import ctypes
@@ -318,6 +320,23 @@ except Exception as _tools_import_error:
 
 
 TOOLS_ENABLED = bool(TOOLS_CONFIG.get("enabled", True)) and EMMA_TOOLS_AVAILABLE
+
+
+
+# Verificador determinista de cifras (no usa el modelo).
+try:
+    import fact_check
+except Exception as _fact_import_error:
+    fact_check = None
+    print(f"[VERIFY] Verificador no disponible: {_fact_import_error}")
+
+VERIFICATION_CONFIG = CONFIG.get("verification", {})
+FACT_CHECK_ENABLED = (
+    bool(VERIFICATION_CONFIG.get("enabled", True)) and fact_check is not None
+)
+FACT_CHECK_MAX_HEDGES = max(
+    0, int(VERIFICATION_CONFIG.get("max_hedges_per_turn", 1))
+)
 
 
 
@@ -2451,6 +2470,28 @@ def build_language_block(preference: Optional[str], detected_lang: str = "") -> 
 
 
 
+_WEEKDAYS_ES = (
+    "lunes", "martes", "miércoles", "jueves",
+    "viernes", "sábado", "domingo",
+)
+_MONTHS_ES = (
+    "enero", "febrero", "marzo", "abril", "mayo", "junio",
+    "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre",
+)
+
+
+def build_today_block() -> str:
+    """Fecha real del sistema: el modelo no debe adivinar 'hoy'."""
+    now = datetime.now()
+    return (
+        f"FECHA DE HOY: {_WEEKDAYS_ES[now.weekday()]}, {now.day} de "
+        f"{_MONTHS_ES[now.month - 1]} de {now.year} "
+        f"({now.strftime('%Y-%m-%d')}, {now.strftime('%H:%M')} hora local). "
+        "Usala para resolver fechas relativas (hoy, ayer, este ano); no la "
+        "repitas salvo que venga al caso."
+    )
+
+
 def get_system_prompt_with_context(
 
     user_text: str = "",
@@ -2514,7 +2555,7 @@ def get_system_prompt_with_context(
 
     )
 
-    context = language_block + "\n\n" + base_prompt
+    context = language_block + "\n\n" + build_today_block() + "\n\n" + base_prompt
 
 
 
@@ -3757,6 +3798,40 @@ class SpokenTextExtractor:
 
 
 
+def _fact_context_for(
+    tool_messages: List[Dict[str, Any]],
+    user_text: str,
+    history: Any,
+    story_mode: bool = False,
+) -> tuple:
+    """Texto real de las fuentes web del turno + la pregunta del usuario.
+
+    Solo se verifican las respuestas basadas en web: en charla libre o en un
+    cuento no hay una fuente contra la que contrastar. No se incluyen las
+    respuestas anteriores a proposito: si un dato no esta en la fuente de
+    este turno, Emma debe decirlo aunque lo haya dicho antes.
+    """
+    if story_mode or not tool_messages:
+        return "", ""
+    chunks = [
+        str(message.get("content") or "")
+        for message in tool_messages
+        if str(message.get("tool_name") or "") in ("web_search", "fetch_page")
+    ]
+    if not chunks:
+        return "", ""
+    return "\n".join(chunks), str(user_text or "")
+
+
+def _verified_spoken(speech: Any, spoken: str) -> str:
+    """Si el verificador cambio algo, el texto real es el que sono."""
+    if speech is None:
+        return spoken
+    if getattr(speech, "fact_hedges", 0) or getattr(speech, "fact_dropped", 0):
+        return getattr(speech, "spoken_text", "") or spoken
+    return spoken
+
+
 class LiveSpeech:
 
     """Reproduce frases en cuanto el LLM las produce.
@@ -3797,7 +3872,22 @@ class LiveSpeech:
 
         self.emitted = False
 
+        # Verificacion de cifras contra el contexto web del turno.
+        self.fact_context = ""
+        self.fact_allowed = ""
+        self.fact_hedges = 0
+        self.fact_dropped = 0
+        self.spoken_text = ""
 
+    def set_fact_context(self, context: str, allowed: str = "") -> None:
+        """Activa la verificacion de cifras para este turno.
+
+        ``context`` es el texto real descargado por las herramientas;
+        ``allowed`` incluye la pregunta y respuestas recientes, para no
+        marcar como inventado un dato que el usuario acaba de decir.
+        """
+        self.fact_context = str(context or "")
+        self.fact_allowed = str(allowed or "")
 
     def feed(self, text: str) -> None:
 
@@ -3861,9 +3951,27 @@ class LiveSpeech:
 
                 continue
 
+            if FACT_CHECK_ENABLED and self.fact_context and not self.story_mode:
+                chunk, hedges, dropped, flagged = fact_check.filter_text(
+                    chunk,
+                    self.fact_context,
+                    self.fact_allowed,
+                    language=self.language,
+                    hedges_left=max(0, FACT_CHECK_MAX_HEDGES - self.fact_hedges),
+                    final=final,
+                )
+                if flagged:
+                    print(f"   [VERIFY] Sin respaldo: {', '.join(flagged[:4])}")
+                self.fact_hedges += hedges
+                self.fact_dropped += dropped
+                if not chunk.strip():
+                    continue
+
             if self.first_audio_time is None:
 
                 self.first_audio_time = time.perf_counter()
+
+            self.spoken_text = (self.spoken_text + " " + chunk).strip()
 
             self.stream.add_text(chunk, self.language)
 
@@ -6027,11 +6135,17 @@ def process_turn(
 
 
 
+    fact_context, fact_allowed = _fact_context_for(
+        tool_messages, user_text, history, story_mode
+    )
+
     if not is_continuous:
 
         current_speech = LiveSpeech(speech_language, story_mode=story_mode)
 
+    if current_speech is not None:
 
+        current_speech.set_fact_context(fact_context, fact_allowed)
 
     current_producer = threading.Thread(target=producer_target, daemon=True)
 
@@ -6123,7 +6237,9 @@ def process_turn(
 
             parsed = json.loads(json_str)
 
-            parsed_spoken = parsed.get("spoken", full_response)
+            parsed_spoken = _verified_spoken(
+                current_speech, parsed.get("spoken", full_response)
+            )
 
             corrections = parsed.get("corrections", []) or []
 
@@ -7522,7 +7638,13 @@ def main():
 
                     
 
+                    fact_context, fact_allowed = _fact_context_for(
+                        tool_messages, user_text, history, story_mode
+                    )
+
                     current_speech = LiveSpeech(active_language, story_mode=story_mode)
+
+                    current_speech.set_fact_context(fact_context, fact_allowed)
 
                     
 
@@ -7716,7 +7838,10 @@ def main():
 
                             parsed = json.loads(full_response[json_start:json_end])
 
-                            spoken = parsed.get("spoken", full_response)
+                            spoken = _verified_spoken(
+                                current_speech,
+                                parsed.get("spoken", full_response),
+                            )
 
                             corrections = parsed.get("corrections", []) or []
 

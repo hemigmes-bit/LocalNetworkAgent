@@ -57,6 +57,9 @@ tools:
   max_result_chars: 2800     # recorte de cada resultado (contexto pequeno)
   page_chars: 1800           # cuerpo del articulo que se adjunta a la busqueda
   selection_timeout_s: 20    # limite de la llamada que elige la herramienta
+verification:
+  enabled: true              # verifica cifras de respuestas web contra la fuente
+  max_hedges_per_turn: 1     # avisos hablados por turno si una cifra no aparece
 song_recognition:
   enabled: true              # reconocer musica grabada (Shazam) y silbidos/tarareos
   seconds: 9                 # segundos que graba tras el aviso de Emma

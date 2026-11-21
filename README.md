@@ -19,6 +19,8 @@ Escucha, entiende, busca en Internet si hace falta, corrige tus errores de forma
 | **Vocabulario progresivo** | 1-2 palabras nuevas por turno, nivel adaptado |
 | **Memoria persistente** | Perfil (nombre, nivel MCER, objetivos), SRS, historial SQLite |
 | **Búsqueda web real** | `ddgs.news` (URL directa al medio), Wikipedia, SearXNG; descarga el artículo completo |
+| **Verificación de cifras** | Contrasta años, porcentajes y cantidades con la fuente; si no aparecen, avisa en vez de inventar |
+| **Herramientas exactas** | `calculate` (aritmética segura) y `current_date` (fecha/hora real del sistema) |
 | **Seguimientos inteligentes** | "Tell me more", "Who can access?" reutilizan el tema y amplían con datos nuevos |
 | **Noticias y actualidad** | Desarrolla temas hasta 5 frases: qué es, a quién afecta, cómo funciona/accede, por qué importa |
 | **Cuentos** | Busca material curado y narra 350-400 palabras |
@@ -129,6 +131,11 @@ tools:
   max_result_chars: 2800
   page_chars: 1800
 
+# Verificación de cifras contra la fuente
+verification:
+  enabled: true
+  max_hedges_per_turn: 1
+
 # Wake word
 audio:
   wake_followup_ms: 90000   # 90 s de ventana de seguimiento
@@ -165,6 +172,7 @@ Emma-Bilingue/
 │       ├── voice_loop.py       # Entry point principal
 │       ├── web_tools.py        # Búsqueda web (ddgs, Wikipedia, SearXNG, noticias)
 │       ├── emma_tools.py       # Orquestación herramientas + seguimientos
+│       ├── fact_check.py       # Verificador determinista de cifras
 │       ├── emma_state.py       # Estado de voz, permisos, ciclo femenino
 │       ├── emma_memory.py      # Memoria SQLite (perfil, SRS, sesiones)
 │       ├── stt_faster_whisper.py
@@ -191,7 +199,9 @@ python test_voice_permission.py   # 8 tests: permiso voz, ciclo femenino
 python test_wake_word.py          # 5 tests: variantes wake, ventana 90 s
 python test_language_routing.py   # 6 tests: en/es, no cambiar a mitad
 python test_emma_patches.py       # 21 tests: web, memoria, anti-repetición
-# Total: 40 tests ✅
+python test_fact_check.py         # 15 tests: cifras y formatos es/en
+python test_local_tools.py        # 17 tests: cálculo, fecha, seguridad
+# Total: 72 tests ✅
 ```
 
 ---
