@@ -277,6 +277,26 @@ class MemoryStore:
                 CREATE INDEX IF NOT EXISTS idx_vocab_due ON vocab(next_review);
                 CREATE INDEX IF NOT EXISTS idx_turns_session ON turns(session_id);
                 CREATE INDEX IF NOT EXISTS idx_sessions_open ON sessions(ended_at);
+
+                -- Expert tool tables
+                CREATE TABLE IF NOT EXISTS expert_cache (
+                    question_hash TEXT PRIMARY KEY,
+                    answer TEXT NOT NULL,
+                    provider TEXT NOT NULL,
+                    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+                );
+
+                CREATE TABLE IF NOT EXISTS expert_log (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    date TEXT NOT NULL DEFAULT (date('now')),
+                    provider TEXT NOT NULL,
+                    ok INTEGER NOT NULL,
+                    latency_ms INTEGER NOT NULL,
+                    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_expert_log_date ON expert_log(date);
+                CREATE INDEX IF NOT EXISTS idx_expert_log_provider ON expert_log(provider);
                 """
             )
 

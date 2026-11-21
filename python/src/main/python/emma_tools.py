@@ -585,12 +585,43 @@ MODEL_TOOLS: List[Dict[str, Any]] = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "ask_expert",
+            "description": (
+                "Consulta a un modelo experto online (gratis) cuando la duda se sale de la "
+                "enseñanza de inglés, necesita información actual, razonamiento largo o código. "
+                "Úsalo solo si la duda se sale de la enseñanza de inglés, necesita información "
+                "actual, razonamiento largo o código."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "question": {
+                        "type": "string",
+                        "description": "La pregunta concreta para el experto.",
+                    },
+                    "context": {
+                        "type": "string",
+                        "description": "Contexto opcional de la conversación.",
+                    },
+                    "language": {
+                        "type": "string",
+                        "enum": ["es", "en"],
+                        "description": "Idioma de la respuesta.",
+                    },
+                },
+                "required": ["question"],
+            },
+        },
+    },
 ]
 
 # Herramientas LOCALES (deterministas): se resuelven ANTES de llamar al modelo.
 # El 9B falla en aritmetica y no sabe la fecha real; no vale la pena gastar
 # tokens del contexto ni VRAM en que el modelo las llame.
-LOCAL_TOOLS = ("calculate", "current_date", "date_calculate", "fetch_weather")
+LOCAL_TOOLS = ("calculate", "current_date", "date_calculate", "fetch_weather", "ask_expert")
 
 # Conjunto de nombres validos para validacion (solo MODEL_TOOLS).
 _TOOL_NAMES = {tool["function"]["name"] for tool in MODEL_TOOLS}
@@ -604,9 +635,12 @@ SELECTION_SYSTEM = (
     "Eres Emma, una profesora bilingue. Decide si necesitas una herramienta. "
     "Usa web_search para noticias, datos actuales o temas externos; fetch_page "
     "solo si el usuario da una URL; calculate para operaciones aritmeticas y "
-    "current_date para la fecha u hora; las herramientas de memoria solo si "
-    "pregunta por su perfil, sus repasos o conversaciones pasadas. Si no hace "
-    "falta ninguna, responde con una frase normal y NO llames herramientas. "
+    "current_date para la fecha u hora; date_calculate para saber que dia cae "
+    "una fecha; fetch_weather para el tiempo meteorologico; ask_expert solo si "
+    "la duda se sale de la ensenanza de ingles, necesita informacion actual, "
+    "razonamiento largo o codigo; las herramientas de memoria solo si pregunta "
+    "por su perfil, sus repasos o conversaciones pasadas. Si no hace falta "
+    "ninguna, responde con una frase normal y NO llames herramientas. "
     "No inventes datos: si no lo sabes, usa web_search."
 )
 
@@ -726,6 +760,15 @@ def validate_arguments(name: str, args: Any) -> Tuple[Optional[Dict[str, Any]], 
             lon = float(args.get("lon", -3.70))
             lang = args.get("lang", "es")
             return {"lat": lat, "lon": lon, "lang": lang}, ""
+        if name == "ask_expert":
+            question = _arg_str(args, "question", max_len=1200)
+            if not question:
+                return None, "falta el parametro question"
+            context = _arg_str(args, "context", required=False, max_len=300)
+            lang = args.get("language", "es")
+            if lang not in ("es", "en"):
+                lang = "es"
+            return {"question": question, "context": context, "language": lang}, ""
     except ToolArgumentError as exc:
         return None, str(exc)
     return None, "herramienta desconocida"
@@ -828,6 +871,13 @@ def tool_result_hint(used: Optional[List[str]] = None) -> str:
             "exacto para la ubicacion pedida. Usa esos datos tal cual; no inventes "
             "el tiempo ni busques en otra fuente."
         )
+    if "ask_expert" in used_set:
+        return (
+            "\n\nEXPERTO: el mensaje 'tool' trae la respuesta de un modelo experto "
+            "online (gratis). Usa esa informacion tal cual; no la reescribas ni la "
+            "inventes. Resume la respuesta para el alumno en tus propias palabras, "
+            "no la pegues tal cual. Menciona la fuente una vez ('segun el experto')."
+        )
     if "fetch_page" in used_set:
         return TOOL_RESULT_HINT
     return TOOL_SEARCH_HINT
@@ -844,13 +894,15 @@ def tool_reinforcement(used: Optional[List[str]] = None) -> str:
         return "Responde con el dia de la semana del resultado, sin inventarlo."
     if "fetch_weather" in used_set:
         return "Responde con el tiempo del resultado, sin inventarlo."
+    if "ask_expert" in used_set:
+        return "Responde resumiendo la respuesta del experto en tus palabras, no la pegues tal cual."
     if "fetch_page" in used_set:
         return TOOL_REINFORCE_PAGE
     return TOOL_REINFORCE_SEARCH
 
 
 def tool_hint(text: str) -> str:
-    """Devuelve 'web', 'memory' o '' segun lo que pueda necesitar el turno."""
+    """Devuelve 'web', 'memory', 'expert' o '' segun lo que pueda necesitar el turno."""
     raw = str(text or "")
     if re.search(
         r"\b(recuerdas|te acuerdas|do you remember|remember when|"
@@ -859,6 +911,21 @@ def tool_hint(text: str) -> str:
         re.IGNORECASE,
     ):
         return "memory"
+    # Detectar preguntas que requieren experto (fuera de ensenanza de ingles)
+    # Se comprueba ANTES que web para priorizar experto en dudas tecnicas/complejas
+    if re.search(
+        r"\b(como funciona|how (does|do)|por que|why does|expliqueme|explain|"
+        r"codigo|code|programa|algorithm|algoritmo|framework|library|api|"
+        r"que significa|what means|define|definicion|"
+        r"historia de|history of|origen de|origin of|"
+        r"comparar|compare|diferencia entre|difference between|"
+        r"ventajas|desventajas|pros|cons|pros and cons|"
+        r"algoritmo|algorithm|complejidad|complexity|big-?o|"
+        r"implementa|implement|debug|depurar|optimiza|optimize)\b",
+        raw,
+        re.IGNORECASE,
+    ):
+        return "expert"
     if web_tools.should_search(raw):
         return "web"
     return ""
@@ -986,6 +1053,8 @@ def _fallback_arguments(name: str, user_text: str, lang: str) -> Dict[str, Any]:
                 lat, lon = coords
                 break
         return {"lat": lat, "lon": lon, "lang": lang}
+    if name == "ask_expert":
+        return {"question": user_text, "context": "", "language": lang}
     if name == "get_due_reviews":
         return {"limit": 3}
     if name == "search_sessions":
@@ -1192,6 +1261,22 @@ def execute_tool(
                 },
             }
 
+        if name == "ask_expert":
+            # args: {"question": str, "context": str, "language": "es"}
+            import asyncio
+            question = str(args.get("question", ""))
+            context = str(args.get("context", ""))
+            lang = args.get("language", "es")
+            if lang not in ("es", "en"):
+                lang = "es"
+            # Use the expert module
+            try:
+                from expert import ask_expert_sync
+                result = ask_expert_sync(question, context, lang)
+                return result
+            except Exception as exc:
+                return {"ok": False, "error": f"expert error: {exc}"}
+
         # Memoria: reutiliza la validacion existente.
         result = emma_memory.execute_tool(name, args)
         return result
@@ -1247,6 +1332,8 @@ def _compact_result(name: str, result: Dict[str, Any], limit: int) -> str:
         )
     elif name == "fetch_weather":
         text = data.get("summary") or json.dumps(data, ensure_ascii=False)
+    elif name == "ask_expert":
+        text = data.get("answer") or json.dumps(data, ensure_ascii=False)
     else:
         text = json.dumps(data, ensure_ascii=False)
     return text[:limit]
@@ -1287,30 +1374,41 @@ def gather_tool_context(
     # la anadimos (ej: "what day is today AND when is the election in spain").
     needs_web = needs_tools(user_text) and (not local or tool_hint(user_text) == "web")
     if needs_web:
-        # Detectar si es consulta meteorologica para usar herramienta dedicada
-        intent = web_tools.detect_intent(user_text)
-        if intent == "weather":
-            # Extraer coordenadas aproximadas
-            city_coords = {
-                "logrono": (42.46, -2.45), "logroño": (42.46, -2.45),
-                "madrid": (40.42, -3.70), "barcelona": (41.38, 2.17),
-                "valencia": (39.47, -0.38), "sevilla": (37.38, -5.98),
-                "bilbao": (43.26, -2.93), "malaga": (36.72, -4.42),
-            }
-            lat, lon = 40.42, -3.70  # default Madrid
-            q_lower = user_text.lower()
-            for city, coords in city_coords.items():
-                if city in q_lower:
-                    lat, lon = coords
-                    break
+        # Detectar si es consulta meteorologica o de experto para usar herramienta dedicada
+        hint = tool_hint(user_text)
+        if hint == "expert":
+            # Consulta a experto para dudas tecnicas/complejas
             calls.append({
                 "function": {
-                    "name": "fetch_weather",
-                    "arguments": {"lat": lat, "lon": lon, "lang": lang, "city": city},
+                    "name": "ask_expert",
+                    "arguments": {"question": user_text, "context": "", "language": lang},
                 }
             })
         else:
-            base_query = web_tools.clean_query(user_text) or _clean(user_text)
+            # Detectar si es consulta meteorologica para usar herramienta dedicada
+            intent = web_tools.detect_intent(user_text)
+            if intent == "weather":
+                # Extraer coordenadas aproximadas
+                city_coords = {
+                    "logrono": (42.46, -2.45), "logroño": (42.46, -2.45),
+                    "madrid": (40.42, -3.70), "barcelona": (41.38, 2.17),
+                    "valencia": (39.47, -0.38), "sevilla": (37.38, -5.98),
+                    "bilbao": (43.26, -2.93), "malaga": (36.72, -4.42),
+                }
+                lat, lon = 40.42, -3.70  # default Madrid
+                q_lower = user_text.lower()
+                for city, coords in city_coords.items():
+                    if city in q_lower:
+                        lat, lon = coords
+                        break
+                calls.append({
+                    "function": {
+                        "name": "fetch_weather",
+                        "arguments": {"lat": lat, "lon": lon, "lang": lang, "city": city},
+                    }
+                })
+            else:
+                base_query = web_tools.clean_query(user_text) or _clean(user_text)
 
             # Seguimiento ("cuentame mas", "tell me more", "who can access..."):
             # reutiliza el tema de la ultima busqueda web para ampliar con datos
@@ -1390,6 +1488,17 @@ def gather_tool_context(
                         "arguments": {
                             "query": web_tools.clean_query(user_text) or _clean(user_text),
                             "limit": 2,
+                        },
+                    }
+                }]
+            elif hint == "expert":
+                calls = [{
+                    "function": {
+                        "name": "ask_expert",
+                        "arguments": {
+                            "question": user_text,
+                            "context": "",
+                            "language": lang,
                         },
                     }
                 }]
@@ -1496,6 +1605,15 @@ def gather_tool_context(
                 "site": "wttr.in",
                 "snippet": payload.get("summary", "")[:300],
                 "kind": "weather",
+                "error": "",
+            })
+        elif name == "ask_expert" and isinstance(payload, dict) and payload.get("ok") is True:
+            sources.append({
+                "title": payload.get("summary") or f"Expert answer for: {payload.get('city', 'question')}",
+                "url": f"expert://{hash(payload.get('summary', 'question'))}",
+                "site": "expert",
+                "snippet": payload.get("summary", "")[:300],
+                "kind": "expert",
                 "error": "",
             })
 
