@@ -52,7 +52,10 @@ _EXPANSION_RE = re.compile(
     r"desarrolla|desarrollar|explica mejor|expl[ií]came m[aá]s|"
     r"cu[eé]ntame m[aá]s|dime m[aá]s|sigue explicando|m[aá]s informaci[oó]n|"
     r"tell me more|tell me something more|more details?|more information|"
-    r"deepen|elaborate|go deeper|expand|explain further|what else"
+    r"deepen|elaborate|go deeper|expand|explain further|what else|"
+    r"source|fuente|newspaper|peri[oó]dico|diario|medio|de donde|"
+    r"where from|which paper|which source|que fuente|que peri[oó]dico|"
+    r"\bfrom\b"
     r")\b",
     re.IGNORECASE,
 )

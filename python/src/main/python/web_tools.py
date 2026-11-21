@@ -595,6 +595,9 @@ _NEWS_WORDS = (
     # Preguntas de actualidad sin la palabra "noticias".
     "que ha pasado", "que ha ocurrido", "what happened",
     "what is happening", "what's happening",
+    # Votos y decisiones de hoy
+    "today's vote", "todays vote", "today vote", "vote today", "vote on",
+    "votacion de hoy", "voto de hoy", "votacion hoy",
 )
 _FACTUAL_PATTERNS = (
     # "que ha pasado hoy", "que ha ocurrido": la pregunta de actualidad mas
@@ -606,6 +609,9 @@ _FACTUAL_PATTERNS = (
     r"\bwhat\s+(has|have)\s+happened\b",
     r"\bwhat\s+happened\b",
     r"\bwhat(?:'s|\s+is|\s+are)?\s+happening\b",
+    # Votos y decisiones de hoy
+    r"\b(today['\s]?s?\s+vote|vote\s+today|vote\s+on)\b",
+    r"\b(votaci[oó]n\s+(?:de\s+hoy|hoy)|voto\s+(?:de\s+hoy|hoy))\b",
     r"\bque es\b", r"\bque son\b", r"\bquien es\b", r"\bquienes son\b",
     r"\bcuando\b", r"\bdonde\b", r"\bcomo funciona\b", r"\bcuanto cuesta\b",
     r"\bcuanto vale\b", r"\bprecio de\b", r"\bprecio del\b", r"\bclima en\b",
