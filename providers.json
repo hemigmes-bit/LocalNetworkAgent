@@ -3,23 +3,23 @@
     {
       "name": "gemini",
       "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/",
-      "model": "gemini-1.5-flash",
+      "model": "gemini-3.8-flash",
       "api_key_env": "GEMINI_API_KEY",
-      "daily_limit": 1500,
+      "daily_limit": 500,
       "enabled": true
     },
     {
       "name": "groq",
       "base_url": "https://api.groq.com/openai/v1",
-      "model": "llama-3.1-8b-instant",
+      "model": "openai/gpt-oss-20b",
       "api_key_env": "GROQ_API_KEY",
-      "daily_limit": 14400,
+      "daily_limit": 1000,
       "enabled": true
     },
     {
       "name": "openrouter",
       "base_url": "https://openrouter.ai/api/v1",
-      "model": "meta-llama/llama-3.1-8b-instruct:free",
+      "model": "openrouter/free",
       "api_key_env": "OPENROUTER_API_KEY",
       "daily_limit": 50,
       "enabled": true
@@ -27,14 +27,14 @@
     {
       "name": "cerebras",
       "base_url": "https://api.cerebras.ai/v1",
-      "model": "llama3.1-8b",
+      "model": "gpt-oss-120b",
       "api_key_env": "CEREBRAS_API_KEY",
-      "daily_limit": 10000,
+      "daily_limit": 1000,
       "enabled": true
     }
   ],
   "fallback_order": ["gemini", "groq", "openrouter", "cerebras"],
   "timeout_seconds": 15,
-  "max_tokens": 300,
+  "max_tokens": 400,
   "temperature": 0.3
 }

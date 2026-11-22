@@ -2587,6 +2587,15 @@ def get_system_prompt_with_context(
 
         )
 
+    context += (
+
+        "\n\nEXPERTOS: si la duda se sale de enseñar inglés (tecnología, ciencia, "
+        "código o datos actuales que no tienes), pide ayuda con la herramienta "
+        "ask_expert. Cuando llegue su respuesta, resúmela con tus palabras para el "
+        "alumno, en su idioma; no la copies tal cual y no añadas datos que no diga."
+
+    )
+
 
 
     # En modo cuento no arrastramos historial ni perfil: evita que el modelo

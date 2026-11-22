@@ -1,105 +1,148 @@
 #!/usr/bin/env python3
-"""Expert tool for Emma: delegates to free online LLMs when local model cannot answer.
+"""Experto online de Emma: delega en LLMs gratuitos cuando el 9B local no llega.
 
-Providers (free tiers, checked 2025):
-  - Gemini:   https://generativelanguage.googleapis.com/v1beta/openai/  (gemini-1.5-flash, 1500/day)
-  - Groq:     https://api.groq.com/openai/v1                         (llama-3.1-8b-instant, 14400/day)
-  - OpenRouter: https://openrouter.ai/api/v1                       (meta-llama/llama-3.1-8b-instruct:free, 50/day)
-  - Cerebras: https://api.cerebras.ai/v1                            (llama3.1-8b, 10000/day)
+Cadena de reserva (se salta los proveedores sin clave o agotados):
 
-Fallback chain: Gemini -> Groq -> OpenRouter -> Cerebras.
-If all fail -> {"error": "expert_unavailable"} so local tutor answers.
+  1. Gemini     https://generativelanguage.googleapis.com/v1beta/openai/
+  2. Groq       https://api.groq.com/openai/v1
+  3. OpenRouter https://openrouter.ai/api/v1
+  4. Cerebras   https://api.cerebras.ai/v1
 
-Config in providers.json (name, base_url, model, api_key_env, daily_limit).
-Keys ONLY via env vars. Providers without key are skipped.
+La configuracion vive en ``providers.json`` (nombre, base_url, modelo,
+variable de entorno de la clave y limite diario). Las claves NUNCA se
+escriben en el codigo: solo se leen de variables de entorno.
 
-Cache in SQLite: expert_cache (question_hash, answer, provider, date).
-Daily quota: expert_log (date, provider, ok, ms) + daily counter per provider.
+Si todos fallan devuelve ``{"error": "expert_unavailable"}`` y el tutor
+local responde por su cuenta.
+
+Cache en SQLite (``expert_cache``) y cuota diaria por proveedor
+(``expert_log``). Se puede probar suelto:
+
+    python expert.py --selftest
+    python expert.py "que es una hash map"
 """
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import os
 import re
 import sqlite3
+import threading
 import time
 from contextlib import contextmanager
-from datetime import date, datetime
+from datetime import date
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 # ---------------------------------------------------------------------------
-# Configuration
+# Configuracion
 # ---------------------------------------------------------------------------
 
-PROVIDERS_FILE = Path(__file__).parent / "providers.json"
-DB_PATH = Path(__file__).parent.parent.parent / "data" / "emma.db"
-
-# Privacy: max chars before sending to expert
 MAX_QUESTION_CHARS = 1200
-MAX_CONTEXT_CHARS = 300
+MAX_CONTEXT_CHARS = 300          # 1200 + 300 = 1500 caracteres maximos
+MAX_EXPERT_TOKENS = 400
+DEFAULT_TIMEOUT = 15.0
 
-# Expert response limits
-MAX_EXPERT_TOKENS = 300
-MAX_EXPERT_WORDS = 150  # ~150 words for expert response
+DB_PATH = Path(__file__).resolve().parent.parent.parent / "data" / "emma.db"
 
-# Privacy patterns to redact
-EMAIL_RE = re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b")
-PHONE_RE = re.compile(r"(\+?\d[\d\s\-\(\)]{7,}\d)")
-URL_RE = re.compile(r"https?://\S+|www\.\S+")
+
+def _find_providers_file() -> Path:
+    """Busca providers.json en la raiz del repo, no junto al modulo."""
+    override = os.getenv("EMMA_PROVIDERS_FILE")
+    if override:
+        return Path(override).expanduser()
+    here = Path(__file__).resolve()
+    # modulo -> ... -> raiz del repo; luego el cwd como ultimo recurso
+    for parent in here.parents:
+        candidate = parent / "providers.json"
+        if candidate.is_file():
+            return candidate
+    candidate = Path.cwd() / "providers.json"
+    return candidate if candidate.is_file() else here.parent / "providers.json"
+
+
+PROVIDERS_FILE = _find_providers_file()
+
+# Patrones de privacidad: nunca salen del equipo.
+EMAIL_RE = re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b")
+PHONE_RE = re.compile(r"(?<![\w.])(\+?\d[\d\s\-().]{7,}\d)(?![\w.])")
+URL_RE = re.compile(r"https?://\S+|www\.\S+", re.IGNORECASE)
 
 
 # ---------------------------------------------------------------------------
-# Providers configuration
+# Configuracion de proveedores
 # ---------------------------------------------------------------------------
+
+_EMPTY_CONFIG: Dict[str, Any] = {
+    "providers": {},
+    "fallback_order": [],
+    "timeout_seconds": DEFAULT_TIMEOUT,
+    "max_tokens": MAX_EXPERT_TOKENS,
+    "temperature": 0.3,
+}
+
 
 def load_providers() -> Dict[str, Any]:
-    """Load and validate providers from JSON config."""
-    if not PROVIDERS_FILE.exists():
-        return {"providers": [], "fallback_order": [], "timeout_seconds": 15}
-    
-    with open(PROVIDERS_FILE, "r", encoding="utf-8") as f:
-        config = json.load(f)
-    
-    providers = []
-    for p in config.get("providers", []):
-        if not p.get("enabled", True):
+    """Lee providers.json y deja solo los proveedores con clave disponible.
+
+    Devuelve siempre ``providers`` como dict {nombre: config}, para que el
+    resto del modulo no tenga que distinguir entre lista y diccionario.
+    """
+    path = PROVIDERS_FILE
+    if not path.is_file():
+        return dict(_EMPTY_CONFIG, providers={}, fallback_order=[])
+
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            raw = json.load(handle)
+    except (OSError, json.JSONDecodeError) as exc:
+        print(f"[EXPERT] providers.json ilegible: {exc}")
+        return dict(_EMPTY_CONFIG, providers={}, fallback_order=[])
+
+    providers: Dict[str, Dict[str, Any]] = {}
+    for item in raw.get("providers") or []:
+        if not isinstance(item, dict) or not item.get("enabled", True):
             continue
-        api_key = os.getenv(p.get("api_key_env", ""))
+        name = str(item.get("name") or "").strip()
+        env_name = str(item.get("api_key_env") or "").strip()
+        if not name or not env_name:
+            continue
+        api_key = (os.getenv(env_name) or "").strip()
         if not api_key:
             continue
-        providers.append({
-            "name": p["name"],
-            "base_url": p["base_url"].rstrip("/"),
-            "model": p["model"],
+        providers[name] = {
+            "name": name,
+            "base_url": str(item.get("base_url") or "").rstrip("/"),
+            "model": str(item.get("model") or ""),
+            "daily_limit": int(item.get("daily_limit") or 1000),
             "api_key": api_key,
-            "daily_limit": p.get("daily_limit", 1000),
-        })
-    
-    fallback_order = [name for name in config.get("fallback_order", []) 
-                      if any(p["name"] == name for p in providers)]
-    
+        }
+
+    ordered = [n for n in (raw.get("fallback_order") or []) if n in providers]
+    ordered += [n for n in providers if n not in ordered]
+
     return {
-        "providers": {p["name"]: p for p in providers},
-        "fallback_order": fallback_order,
-        "timeout_seconds": config.get("timeout_seconds", 15),
+        "providers": providers,
+        "fallback_order": ordered,
+        "timeout_seconds": float(raw.get("timeout_seconds") or DEFAULT_TIMEOUT),
+        "max_tokens": int(raw.get("max_tokens") or MAX_EXPERT_TOKENS),
+        "temperature": float(raw.get("temperature", 0.3)),
     }
 
 
-PROVIDERS_CONFIG = load_providers()
-
-
 # ---------------------------------------------------------------------------
-# Database
+# SQLite: cache y cuota
 # ---------------------------------------------------------------------------
 
 def _init_expert_db() -> None:
-    """Create expert tables if they don't exist."""
+    """Crea las tablas del experto si no existen."""
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(DB_PATH) as db:
-        db.executescript("""
+        db.executescript(
+            """
             CREATE TABLE IF NOT EXISTS expert_cache (
                 question_hash TEXT PRIMARY KEY,
                 answer TEXT NOT NULL,
@@ -118,17 +161,16 @@ def _init_expert_db() -> None:
 
             CREATE INDEX IF NOT EXISTS idx_expert_log_date ON expert_log(date);
             CREATE INDEX IF NOT EXISTS idx_expert_log_provider ON expert_log(provider);
-        """)
+            """
+        )
 
 
 @contextmanager
-def _db() -> sqlite3.Connection:
-    """Thread-safe database connection with WAL mode."""
+def _db():
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(DB_PATH, timeout=30.0)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA foreign_keys=ON")
     try:
         yield conn
         conn.commit()
@@ -136,194 +178,8 @@ def _db() -> sqlite3.Connection:
         conn.close()
 
 
-# ---------------------------------------------------------------------------
-# Privacy: sanitize input
-# ---------------------------------------------------------------------------
-
-def sanitize_text(text: str, max_chars: int = MAX_QUESTION_CHARS) -> str:
-    """Remove PII and truncate."""
-    if not text:
-        return ""
-    text = str(text)
-    # Redact emails
-    text = EMAIL_RE.sub("[email]", text)
-    # Redact phones
-    text = PHONE_RE.sub("[phone]", text)
-    # Redact URLs
-    text = URL_RE.sub("[url]", text)
-    # Truncate
-    if len(text) > max_chars:
-        text = text[:max_chars] + "..."
-    return text.strip()
-
-
-def normalize_question(question: str, context: str = "") -> str:
-    """Create normalized hash for caching."""
-    combined = f"{question.strip().lower()}|{context.strip().lower()}"
-    combined = re.sub(r"\s+", " ", combined).strip()
-    return hashlib.sha256(combined.encode()).hexdigest()[:32]
-
-
-# ---------------------------------------------------------------------------
-# Expert system prompt
-# ---------------------------------------------------------------------------
-
-EXPERT_SYSTEM_PROMPT = """You are an expert consultant for an English tutor.
-The tutor (a local 9B model) cannot answer this question and needs your help.
-
-Constraints:
-- Answer in the SAME LANGUAGE as the question.
-- Be CONCISE: max 150 words, structured (bullets OK).
-- Do NOT mention you are an AI or expert. Just answer directly.
-- If unsure, say so briefly.
-- No fluff, no meta-commentary.
-- Code: include minimal, runnable snippets only.
-- Technical topics: prioritize accuracy over brevity.
-
-The tutor will summarize your answer for the student. Do not address the student directly."""
-
-
-# ---------------------------------------------------------------------------
-# Provider clients
-# ---------------------------------------------------------------------------
-
-import asyncio
-import aiohttp
-
-
-async def _call_provider(
-    provider: Dict[str, Any],
-    messages: List[Dict[str, str]],
-    timeout: int,
-    max_tokens: int,
-    temperature: float,
-) -> Dict[str, Any]:
-    """Call a single provider via OpenAI-compatible API."""
-    url = f"{provider['base_url']}/chat/completions"
-    headers = {
-        "Authorization": f"Bearer {provider['api_key']}",
-        "Content-Type": "application/json",
-    }
-    payload = {
-        "model": provider["model"],
-        "messages": messages,
-        "max_tokens": max_tokens,
-        "temperature": temperature,
-    }
-    
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.post(
-                url, headers=headers, json=payload, timeout=timeout
-            ) as resp:
-                if resp.status >= 400:
-                    text = await resp.text()
-                    return {"error": f"HTTP {resp.status}: {text[:200]}"}
-                data = await resp.json()
-    except asyncio.TimeoutError:
-        return {"error": "timeout"}
-    except aiohttp.ClientError as e:
-        return {"error": f"network: {e}"}
-    except Exception as e:
-        return {"error": f"{type(e).__name__}: {e}"}
-    
-    try:
-        content = data["choices"][0]["message"]["content"]
-        return {"ok": True, "content": content.strip()}
-    except (KeyError, IndexError, TypeError):
-        return {"error": "unexpected_response"}
-
-
-async def call_expert_chain(
-    question: str,
-    context: str = "",
-    language: str = "es",
-) -> Dict[str, Any]:
-    """Try providers in fallback order until one succeeds."""
-    config = load_providers()
-    providers = config["providers"]
-    fallback_order = config["fallback_order"]
-    timeout = config["timeout_seconds"]
-    
-    # Build messages
-    sanitized_q = sanitize_text(question, MAX_QUESTION_CHARS)
-    sanitized_ctx = sanitize_text(context, MAX_CONTEXT_CHARS)
-    
-    messages = [
-        {"role": "system", "content": EXPERT_SYSTEM_PROMPT},
-        {"role": "user", "content": f"Question: {sanitized_q}\nContext: {sanitized_ctx}"},
-    ]
-    
-    for provider_name in fallback_order:
-        provider = config["providers"].get(provider_name)
-        if not provider:
-            continue
-        
-        # Check daily quota
-        if not check_daily_quota(provider_name, provider["daily_limit"]):
-            continue
-        
-        start = time.time()
-        result = await _call_provider(
-            provider,
-            messages,
-            config["timeout_seconds"],
-            MAX_EXPERT_TOKENS,
-            0.3,
-        )
-        latency_ms = int((time.time() - start) * 1000)
-        
-        if result.get("ok"):
-            log_expert_call(provider_name, True, latency_ms)
-            return {
-                "ok": True,
-                "answer": result["content"],
-                "provider": provider_name,
-                "latency_ms": latency_ms,
-            }
-        else:
-            log_expert_call(provider_name, False, latency_ms)
-            # If 429/rate limit, try next provider immediately
-            if "429" in result.get("error", "") or "rate" in result.get("error", "").lower():
-                continue
-            # For other errors, also try next provider
-            continue
-    
-    return {"error": "expert_unavailable"}
-
-
-# ---------------------------------------------------------------------------
-# Cache & Quota
-# ---------------------------------------------------------------------------
-
-def _init_expert_db() -> None:
-    """Create expert tables if they don't exist."""
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with sqlite3.connect(DB_PATH) as db:
-        db.executescript("""
-            CREATE TABLE IF NOT EXISTS expert_cache (
-                question_hash TEXT PRIMARY KEY,
-                answer TEXT NOT NULL,
-                provider TEXT NOT NULL,
-                created_at TEXT NOT NULL DEFAULT (datetime('now'))
-            );
-
-            CREATE TABLE IF NOT EXISTS expert_log (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                date TEXT NOT NULL DEFAULT (date('now')),
-                provider TEXT NOT NULL,
-                ok INTEGER NOT NULL,
-                latency_ms INTEGER NOT NULL,
-                created_at TEXT NOT NULL DEFAULT (datetime('now'))
-            );
-
-            CREATE INDEX IF NOT EXISTS idx_expert_log_date ON expert_log(date);
-            CREATE INDEX IF NOT EXISTS idx_expert_log_provider ON expert_log(provider);
-        """)
-
-
 def get_cached_answer(question_hash: str) -> Optional[str]:
-    """Return cached answer if exists."""
+    """Respuesta cacheada para esa pregunta (o None)."""
     with _db() as db:
         row = db.execute(
             "SELECT answer FROM expert_cache WHERE question_hash=?",
@@ -333,7 +189,6 @@ def get_cached_answer(question_hash: str) -> Optional[str]:
 
 
 def cache_answer(question_hash: str, answer: str, provider: str) -> None:
-    """Store answer in cache."""
     with _db() as db:
         db.execute(
             """INSERT OR REPLACE INTO expert_cache
@@ -343,94 +198,322 @@ def cache_answer(question_hash: str, answer: str, provider: str) -> None:
         )
 
 
-def check_daily_quota(provider_name: str, daily_limit: int) -> bool:
-    """Check if provider has remaining quota today."""
-    today = date.today().isoformat()
-    with _db() as db:
-        count = db.execute(
-            "SELECT COUNT(*) FROM expert_log WHERE date=? AND provider=? AND ok=1",
-            (today, provider_name),
-        ).fetchone()[0]
-    return count < daily_limit
-
-
-def log_expert_call(provider_name: str, ok: bool, latency_ms: int) -> None:
-    """Log expert call for quota tracking."""
-    with _db() as db:
-        db.execute(
-            """INSERT INTO expert_log (date, provider, ok, latency_ms)
-               VALUES (date('now'), ?, ?, ?)""",
-            (provider_name, 1 if ok else 0, latency_ms),
-        )
-
-
 def get_daily_usage(provider_name: str) -> int:
-    """Get today's successful call count for a provider."""
-    today = date.today().isoformat()
+    """Llamadas correctas de hoy para un proveedor."""
     with _db() as db:
         row = db.execute(
             "SELECT COUNT(*) FROM expert_log WHERE date=? AND provider=? AND ok=1",
             (date.today().isoformat(), provider_name),
         ).fetchone()
-    return row[0] if row else 0
+    return int(row[0]) if row else 0
+
+
+def check_daily_quota(provider_name: str, daily_limit: int) -> bool:
+    return get_daily_usage(provider_name) < int(daily_limit)
+
+
+def log_expert_call(provider_name: str, ok: bool, latency_ms: int) -> None:
+    with _db() as db:
+        db.execute(
+            """INSERT INTO expert_log (date, provider, ok, latency_ms)
+               VALUES (date('now'), ?, ?, ?)""",
+            (provider_name, 1 if ok else 0, int(latency_ms)),
+        )
 
 
 # ---------------------------------------------------------------------------
-# Main entry point
+# Privacidad
+# ---------------------------------------------------------------------------
+
+def sanitize_text(text: str, max_chars: int = MAX_QUESTION_CHARS) -> str:
+    """Quita emails, telefonos y URLs, y recorta la longitud."""
+    if not text:
+        return ""
+    value = str(text)
+    value = EMAIL_RE.sub("[email]", value)
+    value = URL_RE.sub("[url]", value)
+    value = PHONE_RE.sub("[phone]", value)
+    value = re.sub(r"\s+", " ", value).strip()
+    if len(value) > max_chars:
+        value = value[:max_chars].rstrip() + "..."
+    return value
+
+
+def normalize_question(question: str, context: str = "") -> str:
+    """Hash estable para cachear preguntas repetidas."""
+    combined = f"{question.strip().lower()}|{context.strip().lower()}"
+    combined = re.sub(r"\s+", " ", combined).strip()
+    return hashlib.sha256(combined.encode("utf-8")).hexdigest()[:32]
+
+
+# ---------------------------------------------------------------------------
+# Prompt del experto
+# ---------------------------------------------------------------------------
+
+EXPERT_SYSTEM_PROMPT = (
+    "You are a consultant for a language tutor. The tutor's local model could "
+    "not answer this question and needs a short, correct answer to relay.\n"
+    "Rules:\n"
+    "- Answer in the SAME LANGUAGE as the question.\n"
+    "- Maximum 150 words. Short paragraphs or bullets; no preamble.\n"
+    "- Be factual. If you are unsure, say what is uncertain in one sentence.\n"
+    "- Code: only the minimal runnable snippet.\n"
+    "- Do not mention being an AI, a model or an expert; do not address a student."
+)
+
+
+# ---------------------------------------------------------------------------
+# Clientes
+# ---------------------------------------------------------------------------
+
+# Enfriamiento por proveedor: evita pagar el mismo fallo en cada turno.
+_COOLDOWN_UNTIL: Dict[str, float] = {}
+_COOLDOWN_REASON: Dict[str, str] = {}
+
+_AUTH_HINTS = ("api key not valid", "invalid api key", "incorrect api key",
+               "pass a valid api key", "authentication", "unauthorized",
+               "invalid_api_key")
+
+
+def _cool_down(name: str, seconds: float, reason: str) -> None:
+    if seconds <= 0:
+        return
+    _COOLDOWN_UNTIL[name] = time.time() + seconds
+    _COOLDOWN_REASON[name] = reason
+
+
+def _in_cooldown(name: str) -> bool:
+    until = _COOLDOWN_UNTIL.get(name, 0.0)
+    if until and until > time.time():
+        return True
+    if until:
+        _COOLDOWN_UNTIL.pop(name, None)
+        _COOLDOWN_REASON.pop(name, None)
+    return False
+
+
+def _reset_cooldowns() -> None:
+    """Solo para tests."""
+    _COOLDOWN_UNTIL.clear()
+    _COOLDOWN_REASON.clear()
+
+
+def _extract_text(message: Any) -> str:
+    content = getattr(message, "content", None)
+    if isinstance(content, str) and content.strip():
+        return content.strip()
+    # Modelos con razonamiento a veces dejan 'content' vacio.
+    extra = getattr(message, "model_extra", None) or {}
+    for key in ("reasoning", "reasoning_content"):
+        value = extra.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
+async def _call_provider(
+    provider: Dict[str, Any],
+    messages: List[Dict[str, str]],
+    timeout: float,
+    max_tokens: int,
+    temperature: float,
+) -> Dict[str, Any]:
+    """Una llamada al proveedor. Devuelve {ok, content} o {error, kind}."""
+    try:
+        from openai import AsyncOpenAI
+    except ImportError:
+        return {"error": "openai_no_instalado", "kind": "setup"}
+
+    client = AsyncOpenAI(
+        base_url=provider["base_url"],
+        api_key=provider["api_key"],
+        timeout=timeout,
+        max_retries=0,
+    )
+    try:
+        response = await client.chat.completions.create(
+            model=provider["model"],
+            messages=messages,
+            max_tokens=max_tokens,
+            temperature=temperature,
+        )
+    except Exception as exc:  # clasificacion por tipo, sin red adicional
+        name = type(exc).__name__
+        body = ""
+        response = getattr(exc, "response", None)
+        if response is not None:
+            try:
+                body = response.text or ""
+            except Exception:
+                body = ""
+        detail = (str(exc) + " " + body).strip()[:240]
+        low = detail.lower()
+        status = getattr(exc, "status_code", None)
+
+        if name in ("APITimeoutError", "TimeoutError"):
+            return {"error": "timeout", "kind": "timeout", "detail": detail}
+        if name in ("APIConnectionError", "ConnectError", "TransportError"):
+            return {"error": "network", "kind": "network", "detail": detail}
+        if name == "RateLimitError" or status == 429:
+            return {"error": "rate_limit", "kind": "rate", "detail": detail}
+        if name in ("AuthenticationError", "PermissionDeniedError") or status in (401, 403):
+            return {"error": "auth", "kind": "auth", "detail": detail}
+        if any(hint in low for hint in _AUTH_HINTS):
+            return {"error": "auth", "kind": "auth", "detail": detail}
+        if status == 402:
+            return {"error": "sin_saldo", "kind": "billing", "detail": detail}
+        if status == 404 or "does not exist" in low or "not found" in low:
+            return {"error": "modelo_no_disponible", "kind": "model", "detail": detail}
+        if name == "BadRequestError" or status == 400:
+            return {"error": f"bad_request: {detail}", "kind": "request", "detail": detail}
+        return {"error": f"{name}: {detail}", "kind": "other", "detail": detail}
+
+    try:
+        message = response.choices[0].message
+    except (AttributeError, IndexError):
+        return {"error": "respuesta_inesperada", "kind": "other", "detail": ""}
+
+    text = _extract_text(message)
+    if not text:
+        return {"error": "respuesta_vacia", "kind": "empty", "detail": ""}
+    return {"ok": True, "content": text}
+
+
+async def call_expert_chain(
+    question: str,
+    context: str = "",
+    language: str = "es",
+) -> Dict[str, Any]:
+    """Prueba los proveedores en orden hasta que uno conteste."""
+    config = load_providers()
+    providers = config["providers"]
+    if not providers:
+        print(f"[EXPERT] Sin proveedores con clave (revisa providers.json y el entorno)")
+        return {"error": "expert_unavailable", "reason": "no_providers"}
+
+    lang_name = "English" if str(language).lower().startswith("en") else "Spanish"
+    system = EXPERT_SYSTEM_PROMPT + f"\n- Write the answer in {lang_name}."
+    user = f"Question: {question}"
+    if context:
+        user += f"\nContext: {context}"
+    messages = [
+        {"role": "system", "content": system},
+        {"role": "user", "content": user},
+    ]
+
+    errors: List[str] = []
+    for provider_name in config["fallback_order"]:
+        provider = providers.get(provider_name)
+        if not provider:
+            continue
+        if _in_cooldown(provider_name):
+            errors.append(f"{provider_name}:cooldown")
+            continue
+        if not check_daily_quota(provider_name, provider["daily_limit"]):
+            errors.append(f"{provider_name}:cuota")
+            continue
+
+        started = time.time()
+        result = await _call_provider(
+            provider,
+            messages,
+            config["timeout_seconds"],
+            config["max_tokens"],
+            config["temperature"],
+        )
+        latency_ms = int((time.time() - started) * 1000)
+
+        if result.get("ok"):
+            log_expert_call(provider_name, True, latency_ms)
+            _COOLDOWN_UNTIL.pop(provider_name, None)
+            print(f"[EXPERT] {provider_name} OK en {latency_ms} ms")
+            return {
+                "ok": True,
+                "answer": result["content"],
+                "provider": provider_name,
+                "latency_ms": latency_ms,
+            }
+
+        log_expert_call(provider_name, False, latency_ms)
+        kind = result.get("kind")
+        reason = result.get("error", "error")
+        errors.append(f"{provider_name}:{reason}")
+        print(f"[EXPERT] {provider_name} falla ({kind}): {reason}")
+
+        if kind == "auth":
+            # Clave invalida/caducada: no se reintenta en una hora.
+            _cool_down(provider_name, 3600, "auth")
+        elif kind == "rate":
+            _cool_down(provider_name, 60, "rate")
+        elif kind == "billing":
+            _cool_down(provider_name, 3600, "billing")
+        elif kind == "timeout":
+            _cool_down(provider_name, 45, "timeout")
+        elif kind == "network":
+            _cool_down(provider_name, 30, "network")
+        elif kind == "model":
+            _cool_down(provider_name, 1800, "model")
+        elif kind == "request":
+            # Payload fijo: un 400 suele ser clave/parametros, no del turno.
+            _cool_down(provider_name, 300, "request")
+
+    return {"error": "expert_unavailable", "reason": "; ".join(errors[-4:])}
+
+
+# ---------------------------------------------------------------------------
+# Punto de entrada
 # ---------------------------------------------------------------------------
 
 async def ask_expert(question: str, context: str = "", language: str = "es") -> Dict[str, Any]:
-    """Main entry point for the expert tool.
-    
-    Returns:
-        {"ok": True, "answer": "...", "provider": "...", "latency_ms": ...}
-        or {"error": "expert_unavailable"}
-    """
-    # Initialize DB
+    """Respuesta del experto o ``{"ok": False, "error": ...}``."""
     _init_expert_db()
-    
-    # Sanitize inputs
-    question = sanitize_text(question, MAX_QUESTION_CHARS)
-    context = sanitize_text(context, MAX_CONTEXT_CHARS)
-    
-    if not question:
-        return {"error": "empty_question"}
-    
-    # Check cache
-    q_hash = normalize_question(question, context)
-    cached = get_cached_answer(question)
+
+    clean_question = sanitize_text(question, MAX_QUESTION_CHARS)
+    clean_context = sanitize_text(context, MAX_CONTEXT_CHARS)
+    if not clean_question:
+        return {"ok": False, "error": "empty_question"}
+
+    question_hash = normalize_question(clean_question, clean_context)
+    cached = get_cached_answer(question_hash)
     if cached:
-        return {"ok": True, "answer": cached, "provider": "cache", "latency_ms": 0}
-    
-    # Call expert chain
-    result = await call_expert_chain(question, context)
-    
+        return {
+            "ok": True,
+            "answer": cached,
+            "provider": "cache",
+            "latency_ms": 0,
+            "cached": True,
+        }
+
+    result = await call_expert_chain(clean_question, clean_context, language)
     if result.get("ok"):
-        # Cache successful answer
-        cache_answer(normalize_question(question, context), result["answer"], result["provider"])
-    
+        cache_answer(question_hash, result["answer"], result["provider"])
     return result
 
 
-# ---------------------------------------------------------------------------
-# Synchronous wrapper for tool calling
-# ---------------------------------------------------------------------------
-
 def ask_expert_sync(question: str, context: str = "", language: str = "es") -> Dict[str, Any]:
-    """Synchronous wrapper for tool calling."""
+    """Version sincrona para el tool calling del bucle de voz."""
     try:
-        return asyncio.run(ask_expert(question, context, language))
+        asyncio.get_running_loop()
     except RuntimeError:
-        # Already in event loop
-        loop = asyncio.new_event_loop()
+        return asyncio.run(ask_expert(question, context, language))
+
+    # Ya hay un bucle activo: se ejecuta en un hilo aparte para no bloquearlo.
+    box: Dict[str, Any] = {}
+
+    def _worker() -> None:
         try:
-            return loop.run_until_complete(ask_expert(question, context, language))
-        finally:
-            loop.close()
+            box.update(asyncio.run(ask_expert(question, context, language)))
+        except Exception as exc:  # nunca propagar al bucle de voz
+            box.update({"ok": False, "error": f"{type(exc).__name__}: {exc}"})
+
+    thread = threading.Thread(target=_worker, daemon=True)
+    thread.start()
+    thread.join()
+    return box or {"ok": False, "error": "expert_unavailable"}
 
 
 # ---------------------------------------------------------------------------
-# Tool definition for emma_tools
+# Definicion y validacion de la herramienta
 # ---------------------------------------------------------------------------
 
 ASK_EXPERT_TOOL = {
@@ -438,10 +521,8 @@ ASK_EXPERT_TOOL = {
     "function": {
         "name": "ask_expert",
         "description": (
-            "Consulta a un modelo experto online (gratis) cuando la duda se sale de la "
-            "enseñanza de inglés, necesita información actual, razonamiento largo o código. "
-            "Úsalo solo si la duda se sale de la enseñanza de inglés, necesita información "
-            "actual, razonamiento largo o código."
+            "Pregunta a un experto online cuando la duda se sale de ensenar "
+            "ingles: tecnologia, ciencia, codigo o datos que no tienes."
         ),
         "parameters": {
             "type": "object",
@@ -452,7 +533,7 @@ ASK_EXPERT_TOOL = {
                 },
                 "context": {
                     "type": "string",
-                    "description": "Contexto opcional de la conversación.",
+                    "description": "Contexto breve de la conversacion (opcional).",
                 },
                 "language": {
                     "type": "string",
@@ -466,105 +547,101 @@ ASK_EXPERT_TOOL = {
 }
 
 
-# ---------------------------------------------------------------------------
-# Validation for tool calling
-# ---------------------------------------------------------------------------
-
 def validate_ask_expert(args: Dict[str, Any]) -> Tuple[Optional[Dict[str, Any]], str]:
-    """Validate ask_expert arguments."""
+    """Devuelve (argumentos limpios, error). Nunca lanza."""
     if not isinstance(args, dict):
         return None, "arguments must be an object"
     question = args.get("question")
-    if not question or not isinstance(question, str):
+    if not isinstance(question, str) or not question.strip():
         return None, "question is required"
-    context = args.get("context", "")
-    language = args.get("language", "es")
+    context = str(args.get("context") or "")
+    language = str(args.get("language") or "es").lower()
     if language not in ("es", "en"):
         language = "es"
-    return {"question": question, "context": context, "language": language}, ""
+    return {
+        "question": question.strip(),
+        "context": context,
+        "language": language,
+    }, ""
 
 
 def execute_ask_expert(args: Dict[str, Any]) -> Dict[str, Any]:
-    """Execute the ask_expert tool."""
     validated, error = validate_ask_expert(args)
     if error:
         return {"ok": False, "error": error}
     return ask_expert_sync(
-        validated["question"],
-        validated.get("context", ""),
-        validated.get("language", "es"),
+        validated["question"], validated["context"], validated["language"]
     )
 
 
 # ---------------------------------------------------------------------------
-# Self-test
+# Pruebas rapidas sin red
 # ---------------------------------------------------------------------------
 
 def _selftest() -> None:
-    import tempfile
     import gc
-    
-    # Test with temporary DB
     import tempfile
+
     global DB_PATH
     original_db = DB_PATH
-    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
-        test_db = Path(f.name)
-    DB_PATH = test_db
-    
+    handle = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+    handle.close()
+    DB_PATH = Path(handle.name)
     try:
         _init_expert_db()
-        
-        # Test sanitize
+
         assert sanitize_text("Call me at 555-123-4567") == "Call me at [phone]"
-        assert sanitize_text("Email me at test@example.com") == "Email me at [email]"
-        assert sanitize_text("Visit https://example.com") == "Visit [url]"
-        
-        # Test normalize_question
-        h1 = normalize_question("What is Python?", "context")
-        h2 = normalize_question("what is python?", "context")
-        assert h1 == h2
-        
-        # Test cache
-        qh = normalize_question("test question", "test context")
-        cache_answer("test hash", "cached answer", "test_provider")
-        cached = get_cached_answer("test hash")
-        assert cached == "cached answer"
-        
-        # Test quota - use unique provider name to avoid interference
-        assert check_daily_quota("test_provider_selftest", 10) == True
-        log_expert_call("test_provider_selftest", True, 100)
-        log_expert_call("test_provider_selftest", True, 100)
-        # After 2 calls with limit 2, we're at the limit - next check should be False
-        assert check_daily_quota("test_provider_selftest", 2) == False
-        # But with higher limit, still room
-        assert check_daily_quota("test_provider_selftest", 3) == True
-        log_expert_call("test_provider_selftest", True, 100)
-        assert check_daily_quota("test_provider_selftest", 3) == False
-        
-        # Test sanitize
-        assert "[email]" in sanitize_text("Contact me at user@domain.com")
-        assert "[phone]" in sanitize_text("Call +1-555-123-4567")
-        assert "[url]" in sanitize_text("Visit https://example.com/page")
-        
-        print("Expert selftest OK")
+        assert sanitize_text("Email test@example.com") == "Email [email]"
+        assert sanitize_text("Visit https://example.com/x") == "Visit [url]"
+        assert len(sanitize_text("x" * 5000, 100)) <= 103
+
+        assert normalize_question("What is Python?", "ctx") == \
+            normalize_question("what is python?", "ctx")
+        assert normalize_question("What is Python?", "a") != \
+            normalize_question("What is Python?", "b")
+
+        cache_answer("h1", "respuesta", "test")
+        assert get_cached_answer("h1") == "respuesta"
+        assert get_cached_answer("nope") is None
+
+        assert check_daily_quota("quota_provider", 2) is True
+        log_expert_call("quota_provider", True, 10)
+        log_expert_call("quota_provider", True, 10)
+        assert check_daily_quota("quota_provider", 2) is False
+        assert get_daily_usage("quota_provider") == 2
+
+        assert validate_ask_expert({"question": "hola"})[0]["language"] == "es"
+        assert validate_ask_expert({"question": "hi", "language": "fr"})[0]["language"] == "es"
+        assert validate_ask_expert({"context": "x"})[1] != ""
+
+        _reset_cooldowns()
+        _cool_down("demo", 60, "rate")
+        assert _in_cooldown("demo") is True
+        _reset_cooldowns()
+        assert _in_cooldown("demo") is False
+
+        print("EXPERT SELFTEST OK")
     finally:
-        # Force close any open connections
         gc.collect()
-        import time
         time.sleep(0.1)
-        if test_db.exists():
-            test_db.unlink()
+        DB_PATH = original_db
+        try:
+            Path(handle.name).unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 if __name__ == "__main__":
     import sys
+
     if "--selftest" in sys.argv:
         _selftest()
+    elif "--providers" in sys.argv:
+        cfg = load_providers()
+        print(f"providers.json: {PROVIDERS_FILE} (existe={PROVIDERS_FILE.is_file()})")
+        print(f"cadena: {cfg['fallback_order'] or '(vacia)'}")
+        for name, prov in cfg["providers"].items():
+            print(f"  - {name}: {prov['model']}  limite={prov['daily_limit']}")
     else:
-        # Quick manual test
-        import asyncio
-        async def test():
-            result = await ask_expert("What is the capital of France?", language="en")
-            print(json.dumps(result, ensure_ascii=False, indent=2))
-        asyncio.run(test())
+        question = " ".join(sys.argv[1:]) or "What is a hash map?"
+        print(json.dumps(ask_expert_sync(question, "", "es"), ensure_ascii=False, indent=2))

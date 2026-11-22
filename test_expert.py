@@ -17,6 +17,7 @@ import sys
 import unittest
 import tempfile
 import time
+from unittest import mock
 from pathlib import Path
 
 sys.path.insert(0, os.path.join(
@@ -159,6 +160,189 @@ class TestSanitizeText(unittest.TestCase):
         self.assertIn("[phone]", result)
         self.assertIn("[email]", result)
         self.assertIn("[url]", result)
+
+
+# ---------------------------------------------------------------------------
+# Cadena de reserva, cache y cuota, todo con mocks (sin red)
+# ---------------------------------------------------------------------------
+
+def _provider(name: str, limit: int = 10) -> dict:
+    return {
+        "name": name,
+        "base_url": f"https://{name}.example/v1",
+        "model": "test-model",
+        "api_key": "test-key",
+        "daily_limit": limit,
+    }
+
+
+class _ExpertTestBase(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        handle = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        handle.close()
+        self._db_file = handle.name
+        self._original_db = expert.DB_PATH
+        expert.DB_PATH = Path(self._db_file)
+        expert._init_expert_db()
+        expert._reset_cooldowns()
+        self.config = {
+            "providers": {
+                "gemini": _provider("gemini"),
+                "groq": _provider("groq"),
+            },
+            "fallback_order": ["gemini", "groq"],
+            "timeout_seconds": 1,
+            "max_tokens": 50,
+            "temperature": 0.0,
+        }
+
+    def tearDown(self):
+        expert.DB_PATH = self._original_db
+        expert._reset_cooldowns()
+        import gc
+        gc.collect()
+        try:
+            Path(self._db_file).unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+class TestFallbackChain(_ExpertTestBase):
+    async def test_429_falls_through_to_next_provider(self):
+        calls = []
+
+        async def fake_call(provider, messages, timeout, max_tokens, temperature):
+            calls.append(provider["name"])
+            if provider["name"] == "gemini":
+                return {"error": "rate_limit", "kind": "rate"}
+            return {"ok": True, "content": "respuesta de groq"}
+
+        with mock.patch.object(expert, "load_providers", return_value=self.config), \
+                mock.patch.object(expert, "_call_provider", side_effect=fake_call):
+            result = await expert.ask_expert("pregunta 429 unica", "", "es")
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["provider"], "groq")
+        self.assertEqual(result["answer"], "respuesta de groq")
+        self.assertEqual(calls, ["gemini", "groq"])
+
+    async def test_all_providers_fail_returns_expert_unavailable(self):
+        async def fake_call(provider, messages, timeout, max_tokens, temperature):
+            return {"error": "timeout", "kind": "timeout"}
+
+        with mock.patch.object(expert, "load_providers", return_value=self.config), \
+                mock.patch.object(expert, "_call_provider", side_effect=fake_call):
+            result = await expert.ask_expert("pregunta que falla siempre", "", "es")
+
+        self.assertFalse(result.get("ok"))
+        self.assertEqual(result["error"], "expert_unavailable")
+
+    async def test_auth_error_cools_down_provider(self):
+        calls = []
+
+        async def fake_call(provider, messages, timeout, max_tokens, temperature):
+            calls.append(provider["name"])
+            if provider["name"] == "gemini":
+                return {"error": "auth", "kind": "auth"}
+            return {"ok": True, "content": "ok"}
+
+        with mock.patch.object(expert, "load_providers", return_value=self.config), \
+                mock.patch.object(expert, "_call_provider", side_effect=fake_call):
+            await expert.ask_expert("primera pregunta auth", "", "es")
+            await expert.ask_expert("segunda pregunta auth", "", "es")
+
+        # Gemini solo se intenta la primera vez: la clave invalida entra en
+        # enfriamiento y la segunda llamada va directa a Groq.
+        self.assertEqual(calls.count("gemini"), 1)
+        self.assertEqual(calls.count("groq"), 2)
+
+    async def test_empty_answer_is_not_success(self):
+        async def fake_call(provider, messages, timeout, max_tokens, temperature):
+            if provider["name"] == "gemini":
+                return {"error": "respuesta_vacia", "kind": "empty"}
+            return {"ok": True, "content": "contenido valido"}
+
+        with mock.patch.object(expert, "load_providers", return_value=self.config), \
+                mock.patch.object(expert, "_call_provider", side_effect=fake_call):
+            result = await expert.ask_expert("pregunta vacia unica", "", "es")
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["answer"], "contenido valido")
+
+
+class TestCacheAndQuota(_ExpertTestBase):
+    async def test_second_identical_question_uses_cache(self):
+        calls = []
+
+        async def fake_call(provider, messages, timeout, max_tokens, temperature):
+            calls.append(1)
+            return {"ok": True, "content": "respuesta cacheable"}
+
+        with mock.patch.object(expert, "load_providers", return_value=self.config), \
+                mock.patch.object(expert, "_call_provider", side_effect=fake_call):
+            first = await expert.ask_expert("Que es una hash map?", "", "es")
+            second = await expert.ask_expert("que es una HASH MAP?", "", "es")
+
+        self.assertTrue(first["ok"])
+        self.assertTrue(second["ok"])
+        self.assertEqual(second["provider"], "cache")
+        self.assertEqual(len(calls), 1)
+
+    async def test_daily_limit_skips_provider(self):
+        self.config["providers"]["gemini"]["daily_limit"] = 1
+        for _ in range(1):
+            expert.log_expert_call("gemini", True, 5)
+        calls = []
+
+        async def fake_call(provider, messages, timeout, max_tokens, temperature):
+            calls.append(provider["name"])
+            return {"ok": True, "content": "desde el segundo"}
+
+        with mock.patch.object(expert, "load_providers", return_value=self.config), \
+                mock.patch.object(expert, "_call_provider", side_effect=fake_call):
+            result = await expert.ask_expert("pregunta con cuota agotada", "", "es")
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(calls, ["groq"])
+
+
+class TestProviderConfig(unittest.TestCase):
+    def test_provider_without_key_is_skipped(self):
+        import json as _json
+
+        handle = tempfile.NamedTemporaryFile(
+            suffix=".json", delete=False, mode="w", encoding="utf-8"
+        )
+        _json.dump(
+            {
+                "providers": [
+                    {"name": "sinclave", "base_url": "https://a.example/v1",
+                     "model": "m", "api_key_env": "EMMA_TEST_NO_EXISTE",
+                     "daily_limit": 5, "enabled": True},
+                    {"name": "conclave", "base_url": "https://b.example/v1",
+                     "model": "m2", "api_key_env": "EMMA_TEST_SI_EXISTE",
+                     "daily_limit": 5, "enabled": True},
+                ],
+                "fallback_order": ["sinclave", "conclave"],
+            },
+            handle,
+        )
+        handle.close()
+
+        with mock.patch.dict(os.environ, {"EMMA_TEST_SI_EXISTE": "abc"}, clear=False):
+            with mock.patch.object(expert, "PROVIDERS_FILE", Path(handle.name)):
+                config = expert.load_providers()
+
+        Path(handle.name).unlink(missing_ok=True)
+        self.assertEqual(list(config["providers"].keys()), ["conclave"])
+        self.assertEqual(config["fallback_order"], ["conclave"])
+
+    def test_missing_file_returns_empty_dict_not_list(self):
+        missing = Path(tempfile.gettempdir()) / "no-existe-providers.json"
+        with mock.patch.object(expert, "PROVIDERS_FILE", missing):
+            config = expert.load_providers()
+        self.assertEqual(config["providers"], {})
+        self.assertEqual(config["fallback_order"], [])
 
 
 if __name__ == "__main__":

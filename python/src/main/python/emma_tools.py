@@ -590,10 +590,8 @@ MODEL_TOOLS: List[Dict[str, Any]] = [
         "function": {
             "name": "ask_expert",
             "description": (
-                "Consulta a un modelo experto online (gratis) cuando la duda se sale de la "
-                "enseñanza de inglés, necesita información actual, razonamiento largo o código. "
-                "Úsalo solo si la duda se sale de la enseñanza de inglés, necesita información "
-                "actual, razonamiento largo o código."
+                "Pregunta a un experto online cuando la duda se sale de ensenar "
+                "ingles: tecnologia, ciencia, codigo o datos que no tienes."
             ),
             "parameters": {
                 "type": "object",
@@ -1263,19 +1261,30 @@ def execute_tool(
 
         if name == "ask_expert":
             # args: {"question": str, "context": str, "language": "es"}
-            import asyncio
             question = str(args.get("question", ""))
             context = str(args.get("context", ""))
             lang = args.get("language", "es")
             if lang not in ("es", "en"):
                 lang = "es"
-            # Use the expert module
             try:
                 from expert import ask_expert_sync
-                result = ask_expert_sync(question, context, lang)
-                return result
+                expert_result = ask_expert_sync(question, context, lang)
             except Exception as exc:
                 return {"ok": False, "error": f"expert error: {exc}"}
+            if not expert_result.get("ok"):
+                return {
+                    "ok": False,
+                    "error": expert_result.get("error") or "expert_unavailable",
+                }
+            answer = str(expert_result.get("answer") or "").strip()
+            return {
+                "ok": True,
+                "result": {
+                    "answer": answer,
+                    "provider": expert_result.get("provider") or "",
+                    "latency_ms": expert_result.get("latency_ms") or 0,
+                },
+            }
 
         # Memoria: reutiliza la validacion existente.
         result = emma_memory.execute_tool(name, args)
@@ -1396,10 +1405,12 @@ def gather_tool_context(
                     "bilbao": (43.26, -2.93), "malaga": (36.72, -4.42),
                 }
                 lat, lon = 40.42, -3.70  # default Madrid
+                city = "madrid"
                 q_lower = user_text.lower()
-                for city, coords in city_coords.items():
-                    if city in q_lower:
+                for known_city, coords in city_coords.items():
+                    if known_city in q_lower:
                         lat, lon = coords
+                        city = known_city
                         break
                 calls.append({
                     "function": {
@@ -1607,15 +1618,10 @@ def gather_tool_context(
                 "kind": "weather",
                 "error": "",
             })
-        elif name == "ask_expert" and isinstance(payload, dict) and payload.get("ok") is True:
-            sources.append({
-                "title": payload.get("summary") or f"Expert answer for: {payload.get('city', 'question')}",
-                "url": f"expert://{hash(payload.get('summary', 'question'))}",
-                "site": "expert",
-                "snippet": payload.get("summary", "")[:300],
-                "kind": "expert",
-                "error": "",
-            })
+        elif name == "ask_expert":
+            # La respuesta del experto va en el mensaje 'tool'; no es una fuente
+            # web, asi que no se añade a la lista de enlaces de la UI.
+            pass
 
     # Fuentes unicas y acotadas.
     unique: List[Dict[str, Any]] = []
