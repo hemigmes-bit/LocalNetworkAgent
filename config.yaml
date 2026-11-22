@@ -12,7 +12,7 @@ llm:
   temperature: 0.6
   top_p: 0.9                   # nucleo de probabilidad: respuestas mas centradas
   repeat_penalty: 1.08         # evita repetir frases y muletillas
-  max_tokens: 480              # margen para razonamientos sin truncar
+  max_tokens: 900              # margen para JSON completo + spoken largo
   keep_alive: "30m"            # mantiene el modelo caliente entre turnos
   num_ctx: 10240              # +25% contexto manteniendo margen de VRAM en 8 GB
 history:

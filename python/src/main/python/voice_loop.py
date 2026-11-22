@@ -3803,6 +3803,16 @@ class SpokenTextExtractor:
 
         return chunk
 
+    def flush(self) -> str:
+        """Devuelve cualquier texto decodificado pendiente al cerrar el stream."""
+        if self.done or self.plain:
+            return ""
+        # Si el stream terminó sin comilla de cierre, lo que haya en decoded
+        # pero no se haya emitido aún es texto válido de "spoken".
+        remaining = self.decoded[self.pos - self.key_end:] if self.key_end >= 0 else self.decoded
+        self.done = True
+        return remaining
+
 
 
 
@@ -4296,6 +4306,12 @@ def _stream_ollama_chat(
                 pass
 
 
+
+
+    # Flush final del extractor por si el JSON quedó truncado sin comilla de cierre
+    final_chunk = extractor.flush()
+    if final_chunk and speech:
+        speech.feed(final_chunk)
 
     return {
 
