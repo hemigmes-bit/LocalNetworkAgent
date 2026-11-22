@@ -256,6 +256,24 @@ class TestFallbackChain(_ExpertTestBase):
         self.assertEqual(calls.count("gemini"), 1)
         self.assertEqual(calls.count("groq"), 2)
 
+    async def test_5xx_cools_down_provider(self):
+        calls = []
+
+        async def fake_call(provider, messages, timeout, max_tokens, temperature):
+            calls.append(provider["name"])
+            if provider["name"] == "gemini":
+                return {"error": "servidor_503", "kind": "server"}
+            return {"ok": True, "content": "ok"}
+
+        with mock.patch.object(expert, "load_providers", return_value=self.config), \
+                mock.patch.object(expert, "_call_provider", side_effect=fake_call):
+            await expert.ask_expert("primera pregunta saturada", "", "es")
+            await expert.ask_expert("segunda pregunta saturada", "", "es")
+
+        # Un 503 aparta al proveedor 90 s: no se paga el fallo cada turno.
+        self.assertEqual(calls.count("gemini"), 1)
+        self.assertEqual(calls.count("groq"), 2)
+
     async def test_empty_answer_is_not_success(self):
         async def fake_call(provider, messages, timeout, max_tokens, temperature):
             if provider["name"] == "gemini":
@@ -343,6 +361,38 @@ class TestProviderConfig(unittest.TestCase):
             config = expert.load_providers()
         self.assertEqual(config["providers"], {})
         self.assertEqual(config["fallback_order"], [])
+
+    def test_per_provider_timeout_overrides_global(self):
+        import json as _json
+
+        handle = tempfile.NamedTemporaryFile(
+            suffix=".json", delete=False, mode="w", encoding="utf-8"
+        )
+        _json.dump(
+            {
+                "providers": [
+                    {"name": "lento", "base_url": "https://a.example/v1",
+                     "model": "m", "api_key_env": "EMMA_TEST_SI_EXISTE",
+                     "daily_limit": 5, "timeout_seconds": 6, "enabled": True},
+                    {"name": "normal", "base_url": "https://b.example/v1",
+                     "model": "m2", "api_key_env": "EMMA_TEST_SI_EXISTE",
+                     "daily_limit": 5, "enabled": True},
+                ],
+                "fallback_order": ["lento", "normal"],
+                "timeout_seconds": 15,
+            },
+            handle,
+        )
+        handle.close()
+
+        with mock.patch.dict(os.environ, {"EMMA_TEST_SI_EXISTE": "abc"}, clear=False):
+            with mock.patch.object(expert, "PROVIDERS_FILE", Path(handle.name)):
+                config = expert.load_providers()
+
+        Path(handle.name).unlink(missing_ok=True)
+        self.assertEqual(config["timeout_seconds"], 15)
+        self.assertEqual(config["providers"]["lento"]["timeout_seconds"], 6)
+        self.assertEqual(config["providers"]["normal"]["timeout_seconds"], 15)
 
 
 if __name__ == "__main__":

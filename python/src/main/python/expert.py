@@ -102,6 +102,7 @@ def load_providers() -> Dict[str, Any]:
         print(f"[EXPERT] providers.json ilegible: {exc}")
         return dict(_EMPTY_CONFIG, providers={}, fallback_order=[])
 
+    global_timeout = float(raw.get("timeout_seconds") or DEFAULT_TIMEOUT)
     providers: Dict[str, Dict[str, Any]] = {}
     for item in raw.get("providers") or []:
         if not isinstance(item, dict) or not item.get("enabled", True):
@@ -118,6 +119,9 @@ def load_providers() -> Dict[str, Any]:
             "base_url": str(item.get("base_url") or "").rstrip("/"),
             "model": str(item.get("model") or ""),
             "daily_limit": int(item.get("daily_limit") or 1000),
+            # Timeout propio opcional: un proveedor lento no debe retrasar
+            # el turno de voz mas de la cuenta antes de pasar al siguiente.
+            "timeout_seconds": float(item.get("timeout_seconds") or global_timeout),
             "api_key": api_key,
         }
 
@@ -127,7 +131,7 @@ def load_providers() -> Dict[str, Any]:
     return {
         "providers": providers,
         "fallback_order": ordered,
-        "timeout_seconds": float(raw.get("timeout_seconds") or DEFAULT_TIMEOUT),
+        "timeout_seconds": global_timeout,
         "max_tokens": int(raw.get("max_tokens") or MAX_EXPERT_TOKENS),
         "temperature": float(raw.get("temperature", 0.3)),
     }
@@ -324,6 +328,7 @@ async def _call_provider(
     except ImportError:
         return {"error": "openai_no_instalado", "kind": "setup"}
 
+    timeout = float(provider.get("timeout_seconds") or timeout)
     client = AsyncOpenAI(
         base_url=provider["base_url"],
         api_key=provider["api_key"],
@@ -366,6 +371,13 @@ async def _call_provider(
             return {"error": "modelo_no_disponible", "kind": "model", "detail": detail}
         if name == "BadRequestError" or status == 400:
             return {"error": f"bad_request: {detail}", "kind": "request", "detail": detail}
+        if status is not None:
+            try:
+                if int(status) >= 500:
+                    # 502/503/504: saturacion del proveedor, no del prompt.
+                    return {"error": f"servidor_{status}", "kind": "server", "detail": detail}
+            except (TypeError, ValueError):
+                pass
         return {"error": f"{name}: {detail}", "kind": "other", "detail": detail}
 
     try:
@@ -456,6 +468,10 @@ async def call_expert_chain(
         elif kind == "request":
             # Payload fijo: un 400 suele ser clave/parametros, no del turno.
             _cool_down(provider_name, 300, "request")
+        elif kind == "server":
+            # Google devolviendo 503: se aparta un rato en vez de pagar el
+            # fallo en cada turno; el siguiente proveedor contesta ya.
+            _cool_down(provider_name, 90, "server")
 
     return {"error": "expert_unavailable", "reason": "; ".join(errors[-4:])}
 
