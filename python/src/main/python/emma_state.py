@@ -278,6 +278,11 @@ _NAME_STOPWORDS = {
     "any", "some", "none", "never", "always", "sometimes", "maybe", "today",
     "tomorrow", "yesterday", "morning", "night", "emma", "assistant", "bot",
     "testing", "test", "joking", "kidding", "serious", "listening", "talking",
+    # STT errors comunes que se confunden con nombres
+    "alright", "okay", "ok", "yeah", "yep", "yes", "nope", "nah", "nope",
+    "thanks", "thanks", "thank", "please", "sorry", "hello", "hi", "hey",
+    "bye", "goodbye", "wait", "waiting", "ready", "done", "go", "going",
+    "come", "coming", "get", "got", "going", "coming", "going",
     # espanol
     "el", "la", "los", "las", "un", "una", "unos", "unas", "de", "del", "al",
     "y", "o", "pero", "si", "sí", "que", "qué", "como", "cómo", "cuando",
@@ -310,6 +315,9 @@ def is_plausible_name(candidate: str) -> bool:
     if text.isdigit():
         return False
     if text.lower() in _NAME_STOPWORDS:
+        return False
+    # Debe empezar con mayúscula (convención de nombre propio)
+    if not text[0].isupper():
         return False
     # Solo letras, espacios, guiones y apostrofes (nombres compuestos).
     if not re.fullmatch(r"[A-Za-zÁÉÍÓÚÜÑáéíóúüñ' -]+", text):
@@ -352,19 +360,19 @@ def detect_name_correction(text: str) -> Optional[str]:
 
 _USER_NAME_PATTERNS: List[tuple] = [
     # Español
-    (re.compile(r"\bmi nombre es\s+([a-záéíóúüñ]{2,})", re.IGNORECASE), False),
-    (re.compile(r"\bme llamo\s+([a-záéíóúüñ]{2,})", re.IGNORECASE), False),
-    (re.compile(r"\bmi apodo es\s+([a-záéíóúüñ]{2,})", re.IGNORECASE), False),
-    (re.compile(r"\bsoy\s+([a-záéíóúüñ]{2,})", re.IGNORECASE), False),
+    (re.compile(r"\bmi nombre es\s+([a-záéíóúüñ']{2,})", re.IGNORECASE), False),
+    (re.compile(r"\bme llamo\s+([a-záéíóúüñ']{2,})", re.IGNORECASE), False),
+    (re.compile(r"\bmi apodo es\s+([a-záéíóúüñ']{2,})", re.IGNORECASE), False),
+    (re.compile(r"\bsoy\s+([a-záéíóúüñ']{2,})", re.IGNORECASE), False),
     # Inglés
-    (re.compile(r"\bmy name is\s+([a-záéíóúüñ]{2,})", re.IGNORECASE), False),
-    (re.compile(r"\bthe name is\s+([a-záéíóúüñ]{2,})", re.IGNORECASE), False),
-    (re.compile(r"\bi am\s+([a-záéíóúüñ]{2,})", re.IGNORECASE), False),
-    (re.compile(r"\bi['’]m\s+([a-záéíóúüñ]{2,})", re.IGNORECASE), False),
-    (re.compile(r"\bcall me\s+([a-záéíóúüñ]{2,})", re.IGNORECASE), False),
-    (re.compile(r"\byou can call me\s+([a-záéíóúüñ]{2,})", re.IGNORECASE), False),
-    (re.compile(r"\bthis is\s+([a-záéíóúüñ]{2,})", re.IGNORECASE), False),
-    (re.compile(r"\bname['’]s\s+([a-záéíóúüñ]{2,})", re.IGNORECASE), False),
+    (re.compile(r"\bmy name is\s+([a-záéíóúüñ']{2,})", re.IGNORECASE), False),
+    (re.compile(r"\bthe name is\s+([a-záéíóúüñ']{2,})", re.IGNORECASE), False),
+    (re.compile(r"\bi am\s+([a-záéíóúüñ']{2,})", re.IGNORECASE), False),
+    (re.compile(r"\bi['’]m\s+([a-záéíóúüñ']{2,})", re.IGNORECASE), False),
+    (re.compile(r"\bcall me\s+([a-záéíóúüñ']{2,})", re.IGNORECASE), False),
+    (re.compile(r"\byou can call me\s+([a-záéíóúüñ']{2,})", re.IGNORECASE), False),
+    (re.compile(r"\bthis is\s+([a-záéíóúüñ']{2,})", re.IGNORECASE), False),
+    (re.compile(r"\bname['’]s\s+([a-záéíóúüñ']{2,})", re.IGNORECASE), False),
 ]
 
 
