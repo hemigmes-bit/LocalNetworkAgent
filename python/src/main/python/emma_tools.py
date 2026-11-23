@@ -45,6 +45,7 @@ SELECTION_NUM_PREDICT = 180
 # "amplia la informacion" reutilizando el tema en vez de buscar la frase.
 _LAST_WEB_QUERY = ""
 _LAST_WEB_TIME = 0.0
+_LAST_WEB_NEWS = False
 _FOLLOWUP_TTL_S = 900.0
 
 _EXPANSION_RE = re.compile(
@@ -66,6 +67,20 @@ _REFERENCE_RE = re.compile(
     r"^\s*(y|e|and|pero|but|then|entonces)?\s*"
     r"(donde|cuando|quien|quienes|como|que|cuanto|cuanta|por que|a que|"
     r"where|when|who|how|what|why|which|it|that|this|eso|esto|el|ella|ellos)\b",
+    re.IGNORECASE,
+)
+
+# Referencias al tema anterior ("esa noticia que me contaste", "the news you
+# told me about"): el turno no nombra tema, pero remite a la ultima busqueda.
+_BACKREF_RE = re.compile(
+    r"\b(?:"
+    r"(?:that|the|this)\s+(?:specific\s+)?(?:news|story|article|information|"
+    r"topic|subject|one|thing)|"
+    r"you\s+(?:told|mentioned|said)|"
+    r"lo\s+que\s+me\s+(?:dijiste|contaste|mencionaste|comentaste)|"
+    r"esa\s+(?:noticia|informacion|información|historia)|"
+    r"la\s+que\s+me\s+(?:dijiste|contaste|mencionaste)"
+    r")\b",
     re.IGNORECASE,
 )
 
@@ -98,7 +113,7 @@ def needs_followup(text: str) -> bool:
     if not _LAST_WEB_QUERY or (time.time() - _LAST_WEB_TIME) > _FOLLOWUP_TTL_S:
         return False
     raw = str(text or "")
-    if _EXPANSION_RE.search(raw):
+    if _EXPANSION_RE.search(raw) or _BACKREF_RE.search(raw):
         return True
     # "Who can get access to this digital literacy program?" no dice "more",
     # pero comparte el tema con la consulta anterior.
@@ -121,6 +136,45 @@ def needs_followup(text: str) -> bool:
         if pronoun or conjunction or len(words) <= 4:
             return True
     return False
+
+
+# Palabras de peticion, muletilla o meta que no identifican un tema.
+_TURN_META = {
+    "find", "found", "search", "look", "tell", "told", "said", "says", "say",
+    "news", "specific", "particular", "about", "more", "just", "only", "okay",
+    "please", "thing", "things", "stuff", "subject", "other", "another",
+    "bring", "come", "came", "today", "tonight", "now", "then", "again",
+    "sure", "yeah", "cool", "alright", "right", "well", "like", "want",
+    "need", "check", "talk", "speak", "know", "give", "make", "really",
+    "quiero", "dime", "busca", "búsca", "encuentra", "noticia", "noticias",
+    "otra", "otro", "otras", "otros", "tema", "hoy", "solo", "vale",
+    "bueno", "cosa", "cosas", "hablame", "cuentame", "explica", "sabes",
+}
+
+
+def _topic_words(text: str) -> set:
+    """Palabras que identifican de que se habla (sin muletillas)."""
+    return {word for word in _significant_words(text) if word not in _TURN_META}
+
+
+def build_followup_query(text: str) -> str:
+    """Consulta para un seguimiento.
+
+    Si el turno nombra un tema nuevo (dos o mas palabras propias), manda ese
+    tema y se descarta el anterior. Si solo amplia ("tell me more", "y donde
+    nacio"), se reutiliza la ultima consulta y se le añaden las palabras nuevas.
+    """
+    if not _LAST_WEB_QUERY:
+        return ""
+    new_topic = _topic_words(text) - _topic_words(_LAST_WEB_QUERY)
+    if len(new_topic) >= 2:
+        return web_tools.clean_query(text) or " ".join(sorted(new_topic))
+    extra = [word for word in sorted(new_topic) if len(word) > 4][:2]
+    return " ".join([_LAST_WEB_QUERY] + extra).strip()
+
+
+def _has_topic(text: str) -> bool:
+    return bool(_topic_words(text))
 
 
 def should_consult(text: str) -> bool:
@@ -515,6 +569,10 @@ MODEL_TOOLS: List[Dict[str, Any]] = [
                 "properties": {
                     "query": {"type": "string", "description": "Consulta breve."},
                     "lang": {"type": "string", "enum": ["es", "en"]},
+                    "news": {
+                        "type": "boolean",
+                        "description": "True si pide noticias o actualidad de hoy.",
+                    },
                 },
                 "required": ["query"],
             },
@@ -713,10 +771,18 @@ def validate_arguments(name: str, args: Any) -> Tuple[Optional[Dict[str, Any]], 
         return None, f"herramienta desconocida: {name}"
     try:
         if name == "web_search":
-            return {
-                "query": _arg_str(args, "query", max_len=200),
+            raw_query = _arg_str(args, "query", max_len=200)
+            news_flag = args.get("news") is True
+            cleaned_query = web_tools.clean_query(raw_query)
+            if news_flag and not cleaned_query:
+                cleaned_query = web_tools.news_query(raw_query)
+            cleaned: Dict[str, Any] = {
+                "query": cleaned_query,
                 "lang": _arg_lang(args, "es"),
-            }, ""
+            }
+            if news_flag:
+                cleaned["news"] = True
+            return cleaned, ""
         if name == "fetch_page":
             return {"url": _arg_url(args)}, ""
         if name == "calculate":
@@ -1074,15 +1140,21 @@ def execute_tool(
     timeout = float(cfg.get("timeout_s", 8))
     try:
         if name == "web_search":
-            global _LAST_WEB_QUERY, _LAST_WEB_TIME
-            _LAST_WEB_QUERY = str(args["query"])
+            global _LAST_WEB_QUERY, _LAST_WEB_TIME, _LAST_WEB_NEWS
+            query = str(args.get("query") or "").strip()
+            news_mode = bool(args.get("news"))
+            if not query or (not news_mode and not _has_topic(query)):
+                return {"ok": False, "error": "empty_query"}
+            _LAST_WEB_QUERY = query
             _LAST_WEB_TIME = time.time()
+            _LAST_WEB_NEWS = news_mode
             results = web_tools.search_web(
-                args["query"],
+                query,
                 lang=args.get("lang", "es"),
                 max_results=int(cfg.get("max_results", 4)),
                 timeout=timeout,
                 config=cfg,
+                news=news_mode,
             )
 
             # El titular y el snippet no bastan para "quien", "donde" o
@@ -1329,6 +1401,12 @@ def _compact_result(name: str, result: Dict[str, Any], limit: int) -> str:
             body = str(item.get("text") or "").strip()
             if body:
                 lines.append(f"  Extracto: {body}")
+        if not lines:
+            return (
+                "Sin resultados relevantes: la busqueda no devolvio ninguna "
+                "pagina que confirme esta consulta. Dilo con honestidad y no "
+                "inventes titulares, cifras ni fuentes."
+            )
         text = "\n".join(lines)
     elif name == "fetch_page":
         text = f"{data.get('title') or data.get('site')}: {data.get('text') or data.get('snippet') or ''}"
@@ -1346,6 +1424,32 @@ def _compact_result(name: str, result: Dict[str, Any], limit: int) -> str:
     else:
         text = json.dumps(data, ensure_ascii=False)
     return text[:limit]
+
+
+_WEATHER_CITIES = {
+    "logrono": (42.46, -2.45), "logroño": (42.46, -2.45),
+    "madrid": (40.42, -3.70), "barcelona": (41.38, 2.17),
+    "valencia": (39.47, -0.38), "sevilla": (37.38, -5.98),
+    "bilbao": (43.26, -2.93), "malaga": (36.72, -4.42),
+}
+
+
+def _weather_call(user_text: str, lang: str) -> Dict[str, Any]:
+    """fetch_weather para la ciudad nombrada (Madrid por defecto)."""
+    lat, lon = 40.42, -3.70
+    city = "madrid"
+    q_lower = str(user_text or "").lower()
+    for known_city, coords in _WEATHER_CITIES.items():
+        if known_city in q_lower:
+            lat, lon = coords
+            city = known_city
+            break
+    return {
+        "function": {
+            "name": "fetch_weather",
+            "arguments": {"lat": lat, "lon": lon, "lang": lang, "city": city},
+        }
+    }
 
 
 def gather_tool_context(
@@ -1383,72 +1487,39 @@ def gather_tool_context(
     # la anadimos (ej: "what day is today AND when is the election in spain").
     needs_web = needs_tools(user_text) and (not local or tool_hint(user_text) == "web")
     if needs_web:
-        # Detectar si es consulta meteorologica o de experto para usar herramienta dedicada
         hint = tool_hint(user_text)
         if hint == "expert":
-            # Consulta a experto para dudas tecnicas/complejas
+            # Consulta a experto para dudas tecnicas/complejas.
             calls.append({
                 "function": {
                     "name": "ask_expert",
                     "arguments": {"question": user_text, "context": "", "language": lang},
                 }
             })
+        elif web_tools.detect_intent(user_text) == "weather":
+            calls.append(_weather_call(user_text, lang))
         else:
-            # Detectar si es consulta meteorologica para usar herramienta dedicada
-            intent = web_tools.detect_intent(user_text)
-            if intent == "weather":
-                # Extraer coordenadas aproximadas
-                city_coords = {
-                    "logrono": (42.46, -2.45), "logroño": (42.46, -2.45),
-                    "madrid": (40.42, -3.70), "barcelona": (41.38, 2.17),
-                    "valencia": (39.47, -0.38), "sevilla": (37.38, -5.98),
-                    "bilbao": (43.26, -2.93), "malaga": (36.72, -4.42),
-                }
-                lat, lon = 40.42, -3.70  # default Madrid
-                city = "madrid"
-                q_lower = user_text.lower()
-                for known_city, coords in city_coords.items():
-                    if known_city in q_lower:
-                        lat, lon = coords
-                        city = known_city
-                        break
-                calls.append({
-                    "function": {
-                        "name": "fetch_weather",
-                        "arguments": {"lat": lat, "lon": lon, "lang": lang, "city": city},
-                    }
-                })
+            # Un seguimiento con tema nuevo usa ese tema; si solo amplia,
+            # reutiliza la ultima consulta. Nunca se mezclan los dos temas.
+            followup = needs_followup(user_text)
+            news_mode = (
+                web_tools.detect_intent(user_text) == "news"
+                or (followup and _LAST_WEB_NEWS)
+            )
+            if followup:
+                query = build_followup_query(user_text)
+            elif news_mode:
+                query = web_tools.news_query(user_text, lang)
             else:
-                base_query = web_tools.clean_query(user_text) or _clean(user_text)
-
-            # Seguimiento ("cuentame mas", "tell me more", "who can access..."):
-            # reutiliza el tema de la ultima busqueda web para ampliar con datos
-            # nuevos, en vez de buscar la frase literal y quedarse sin contexto.
-            reuse_query = needs_followup(user_text)
-            query = ""
-
-            if reuse_query:
-                # El tema anterior manda; las palabras nuevas ("access", "history")
-                # añaden otra cara del mismo asunto para no devolver lo mismo.
-                extra = [
-                    word
-                    for word in sorted(
-                        _significant_words(user_text) - _significant_words(_LAST_WEB_QUERY)
-                    )
-                    if len(word) > 4
-                ][:3]
-                query = " ".join([_LAST_WEB_QUERY] + extra).strip()
+                query = web_tools.clean_query(user_text) or _clean(user_text)
+            if query and (news_mode or _has_topic(query)):
+                args: Dict[str, Any] = {"query": query, "lang": lang}
+                if news_mode:
+                    args["news"] = True
                 calls.append({
                     "function": {
                         "name": "web_search",
-                        "arguments": {"query": query, "lang": lang},
-                    }
-                })
-            else:
-                calls.append({
-                    "function": {
-                        "name": "web_search",
-                        "arguments": {"query": base_query, "lang": lang},
+                        "arguments": args,
                     }
                 })
 
@@ -1456,40 +1527,20 @@ def gather_tool_context(
     if not calls:
         calls = select_tool_calls(user_text, lang, model, url, num_ctx, timeout)
 
-        # Seguimiento...
-        reuse_query = needs_followup(user_text)
-        query = ""
-
-        if reuse_query:
-            extra = [
-                word
-                for word in sorted(
-                    _significant_words(user_text) - _significant_words(_LAST_WEB_QUERY)
-                )
-                if len(word) > 4
-            ][:3]
-            query = " ".join([_LAST_WEB_QUERY] + extra).strip()
-            calls = [{
-                "function": {
-                    "name": "web_search",
-                    "arguments": {"query": query, "lang": lang},
-                }
-            }]
-
-        # Si el modelo no llama ninguna herramienta pero el turno lo pide...
-        if not calls and needs_tools(user_text):
-            hint = tool_hint(user_text)
-            if hint == "memory":
+        if not calls and needs_followup(user_text):
+            query = build_followup_query(user_text)
+            if query:
+                args: Dict[str, Any] = {"query": query, "lang": lang}
+                if _LAST_WEB_NEWS:
+                    args["news"] = True
                 calls = [{
                     "function": {
-                        "name": "search_sessions",
-                        "arguments": {
-                            "query": web_tools.clean_query(user_text) or _clean(user_text),
-                            "limit": 2,
-                        },
+                        "name": "web_search",
+                        "arguments": args,
                     }
                 }]
-            # Si el modelo no llama ninguna herramienta pero el turno lo pide...
+
+        # Si el modelo no llama ninguna herramienta pero el turno lo pide...
         if not calls and needs_tools(user_text):
             hint = tool_hint(user_text)
             if hint == "memory":
@@ -1513,36 +1564,31 @@ def gather_tool_context(
                         },
                     }
                 }]
+            elif web_tools.detect_intent(user_text) == "weather":
+                calls = [_weather_call(user_text, lang)]
             else:
-                # Usar weather_query si es consulta meteorologica
-                intent = web_tools.detect_intent(user_text)
-                if intent == "weather":
-                    city_coords = {
-                        "logrono": (42.46, -2.45), "logroño": (42.46, -2.45),
-                        "madrid": (40.42, -3.70), "barcelona": (41.38, 2.17),
-                        "valencia": (39.47, -0.38), "sevilla": (37.38, -5.98),
-                        "bilbao": (43.26, -2.93), "malaga": (36.72, -4.42),
-                    }
-                    lat, lon = 40.42, -3.70
-                    q_lower = user_text.lower()
-                    for city, coords in city_coords.items():
-                        if city in q_lower:
-                            lat, lon = coords
-                            break
+                news_mode = (
+                    web_tools.detect_intent(user_text) == "news"
+                    or (_LAST_WEB_NEWS and needs_followup(user_text))
+                )
+                if news_mode:
+                    query = (
+                        build_followup_query(user_text)
+                        if needs_followup(user_text)
+                        else web_tools.news_query(user_text, lang)
+                    )
+                else:
+                    query = web_tools.clean_query(user_text) or _clean(user_text)
+                if query and (news_mode or _has_topic(query)):
+                    args: Dict[str, Any] = {"query": query, "lang": lang}
+                    if news_mode:
+                        args["news"] = True
                     calls = [{
                         "function": {
-                            "name": "fetch_weather",
-                            "arguments": {"lat": lat, "lon": lon, "lang": lang, "city": city},
+                            "name": "web_search",
+                            "arguments": args,
                         }
                     }]
-                else:
-                    base_query = web_tools.weather_query(user_text, lang)
-                calls = [{
-                    "function": {
-                        "name": "web_search",
-                        "arguments": {"query": base_query, "lang": lang},
-                    }
-                }]
 
     sources: List[Dict[str, Any]] = []
     used: List[str] = []
@@ -1654,9 +1700,13 @@ def gather_tool_context(
 # ---------------------------------------------------------------------------
 
 def _selftest() -> None:
-    assert validate_arguments("web_search", {"query": "noticias"})[0] == {
-        "query": "noticias", "lang": "es"
+    assert validate_arguments("web_search", {"query": "precio del dolar"})[0] == {
+        "query": "precio del dolar", "lang": "es"
     }
+    news_args, _ = validate_arguments(
+        "web_search", {"query": "elecciones", "news": True}
+    )
+    assert news_args.get("news") is True
     assert validate_arguments("web_search", {})[0] is None
     assert validate_arguments("fetch_page", {"url": "elpais.com"})[0]["url"].startswith("https://")
     assert validate_arguments("fetch_page", {"url": "file:///etc/passwd"})[0] is None

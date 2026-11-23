@@ -613,6 +613,10 @@ _NEWS_WORDS = (
     # Preguntas de actualidad sin la palabra "noticias".
     "que ha pasado", "que ha ocurrido", "what happened",
     "what is happening", "what's happening",
+    # Anuncios y estrenos del dia ("AI safety rules that came out today").
+    "came out today", "released today", "announced today", "approved today",
+    "launched today", "signed today", "salió hoy", "salio hoy",
+    "anunciado hoy", "aprobado hoy", "hoy se ha aprobado", "hoy ha pasado",
     # Votos y decisiones de hoy
     "today's vote", "todays vote", "today vote", "vote today", "vote on",
     "votacion de hoy", "voto de hoy", "votacion hoy",
@@ -795,6 +799,48 @@ def clean_query(text: str) -> str:
         q,
         flags=re.IGNORECASE,
     ).strip()
+    # Muletillas al principio y peticiones meta ("yeah sure, just tell me more
+    # about it", "no no, find that specific news you told me about"). No
+    # identifican tema y envenenan la busqueda con resultados de portada.
+    q = re.sub(
+        r"^(?:(?:yeah|yes|yep|nope|no|sure|cool|okay|ok|alright|right|well|oh)"
+        r"\b[,\s.]*)+",
+        "",
+        q,
+        flags=re.IGNORECASE,
+    )
+    q = re.sub(
+        r"\b(?:yeah|yes|sure|cool|okay|alright|right|well|oh)\b[,.]+",
+        " ",
+        q,
+        flags=re.IGNORECASE,
+    )
+    q = re.sub(
+        r"\b(?:come\s+on|bring\s+it\s+on|let'?s\s+go|i\s+like\s+that(?:\s+thing)?|"
+        r"that\s+thing|stuff\s+like\s+(?:this|that)|just|please)\b",
+        " ",
+        q,
+        flags=re.IGNORECASE,
+    )
+    q = re.sub(
+        r"\b(?:find|search|look\s+up|check)\s+(?:that|the|this)?\s*"
+        r"(?:specific\s+)?(?:news|information|article|story)?\s*"
+        r"(?:you\s+told\s+me\s+about(?:\s+it)?|about\s+it|for\s+it)\b|"
+        r"\b(?:find|search|look\s+up|check)\s+it\b",
+        " ",
+        q,
+        flags=re.IGNORECASE,
+    )
+    q = re.sub(
+        r"\b(?:the\s+)?news\s+you\s+told\s+me\s+about(?:\s+it)?\b|"
+        r"\byou\s+told\s+me\s+about(?:\s+it)?\b|"
+        r"\btell\s+me\s+more\s+about(?:\s+it)?\b|"
+        r"\bany\s+other\s+subject\b|\binstead\b",
+        " ",
+        q,
+        flags=re.IGNORECASE,
+    )
+    q = re.sub(r"\s+", " ", q).strip()
     # Formulas interrogativas al inicio: "quien es", "qué es", "what is"...
     q = re.sub(
         r"^(quien|quién|quienes|quiénes|que|qué|cual|cuál|cuales|cuáles|"
@@ -853,8 +899,16 @@ def clean_query(text: str) -> str:
             meaningful.append(part)
         if meaningful:
             q = " ".join(meaningful)
-    
-    return q or text.strip()
+
+    # Conjunciones/articulos colgando al final ("housing decrease and").
+    q = re.sub(
+        r"(?:\s+(?:and|or|but|with|for|to|of|the|a|y|e|o|pero|con|para|de|el|la))+\s*$",
+        "",
+        q,
+        flags=re.IGNORECASE,
+    ).strip(" ,.;:¿?¡!")
+
+    return q
 
 
 # Formulas de pregunta de actualidad que no aportan nada al buscador.
@@ -873,6 +927,15 @@ _NEWS_TIME_RE = re.compile(
     r"today|this\s+week|right\s+now)\b",
     re.IGNORECASE,
 )
+# Adjetivos de "importancia" que arruinan la consulta: "most important
+# news in Spain" devolvia deportes de EE. UU.; "Spain news" acierta.
+_NEWS_FILLER_RE = re.compile(
+    r"\b(?:most\s+important|main|top|biggest|"
+    r"lo\s+mas\s+importante|la\s+mas\s+importante|"
+    r"las?\s+mas\s+importantes?|mas\s+importantes?|"
+    r"principales?|destacad[oa]s?)\b",
+    re.IGNORECASE,
+)
 _NEWS_WORD_RE = re.compile(
     r"\b(?:noticias?|news|novedades|actualidad|ultima\s+hora)\b",
     re.IGNORECASE,
@@ -889,6 +952,7 @@ def news_query(text: str, lang: str = "es") -> str:
     """
     q = clean_query(text)
     q = _NEWS_STEM_RE.sub(" ", q)
+    q = _NEWS_FILLER_RE.sub(" ", q)
     q = _NEWS_WORD_RE.sub(" ", q)
     q = _NEWS_TIME_RE.sub(" ", q)
     q = re.sub(
@@ -2152,6 +2216,28 @@ def _search_relevance(query: str, result: Dict[str, Any]) -> int:
     return title_hits * 3 + snippet_hits
 
 
+def _is_relevant(query: str, result: Dict[str, Any]) -> bool:
+    """True si el resultado comparte tema con la consulta.
+
+    Con dos o mas palabras clave se exige al menos una en el titulo y dos en
+    total: una portada o una biografia tangencial no debe colarse solo porque
+    su snippet repita una palabra de la consulta.
+    """
+    if _search_relevance(query, result) <= 0:
+        return False
+    keywords = _keywords(query) - _GENERIC_QUERY_WORDS
+    if len(keywords) < 2:
+        return True
+    title = _norm(result.get("title") or "")
+    haystack = _norm(
+        f"{result.get('title') or ''} "
+        f"{result.get('snippet') or result.get('text') or ''}"
+    )
+    title_hits = sum(1 for word in keywords if word in title)
+    total_hits = sum(1 for word in keywords if word in haystack)
+    return title_hits >= 1 and total_hits >= 2
+
+
 def _searxng_search(
     query: str,
     lang: str,
@@ -2232,12 +2318,19 @@ def search_web(
     timeout: float = 7.0,
     extra_trusted: Optional[List[str]] = None,
     config: Optional[Dict[str, Any]] = None,
+    news: bool = False,
 ) -> List[Dict[str, Any]]:
     """Busca primero en SearXNG; usa DuckDuckGo/Yandex y Bing RSS como respaldo."""
+    if not str(query or "").strip():
+        return []
     cfg = config or {}
     engine = str(cfg.get("search_engine") or "searxng").lower().strip()
     searxng_url = str(cfg.get("searxng_url") or "http://localhost:8080").rstrip("/")
-    cache_key = f"search:{engine}:{searxng_url}:{lang}:{max_results}:{_norm(query)}"
+    news_mode = bool(news) or detect_intent(query) == "news"
+    cache_key = (
+        f"search:{engine}:{searxng_url}:{lang}:{max_results}:"
+        f"{int(news_mode)}:{_norm(query)}"
+    )
     cached = _cache_get(cache_key)
     if cached is not None:
         return cached
@@ -2252,8 +2345,10 @@ def search_web(
     news_future = news_pool.submit(_ddgs_news, query, wanted, timeout, lang)
 
     # Motor prioritario: SearXNG local. Si no responde o no devuelve enlaces
-    # validos, se conserva la cadena de respaldo que ya tenia Emma.
-    if engine == "searxng":
+    # validos, se conserva la cadena de respaldo que ya tenia Emma. En modo
+    # noticias se evita la busqueda general: devuelve portadas y enciclopedias
+    # que no responden a "que ha pasado hoy".
+    if engine == "searxng" and not news_mode:
         normalized = _searxng_search(query, lang, wanted, timeout, cfg)
 
     if len(normalized) < min(2, wanted):
@@ -2295,29 +2390,22 @@ def search_web(
 
     def _rank(candidates: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Filtra destinos inseguros y resultados sin relacion con la consulta."""
-        keywords = _keywords(query) - _GENERIC_QUERY_WORDS
         scored: List[Dict[str, Any]] = []
         for result in candidates:
             url = result.get("url") or ""
             allowed, _ = _url_allowed(url)
             if not allowed or _domain_score(url, extra_trusted) < 0:
                 continue
-            relevance = _search_relevance(query, result)
-            if relevance <= 0:
+            is_news = str(result.get("kind") or "") == "news"
+            # Las noticias vienen de un buscador de noticias ya filtrado por la
+            # consulta: sus titulares casi nunca repiten las palabras exactas
+            # ("released today"), asi que no se les exige solapamiento lexico.
+            if not is_news and not _is_relevant(query, result):
                 continue
-            # Con dos o mas palabras clave, exigir al menos dos coincidencias:
-            # evita que "Sam Altman" acepte una pagina que solo dice "SAM".
-            if len(keywords) >= 2:
-                haystack = _norm(
-                    f"{result.get('title') or ''} "
-                    f"{result.get('snippet') or result.get('text') or ''}"
-                )
-                if sum(1 for word in keywords if word in haystack) < 2:
-                    continue
+            relevance = _search_relevance(query, result)
             item = dict(result)
-            # Una noticia con el tema en el titular aporta el articulo
-            # concreto; una portada generica, no.
-            if str(item.get("kind") or "") == "news":
+            # Una noticia aporta el articulo concreto; una portada generica, no.
+            if is_news:
                 relevance += 1
             item["relevance"] = relevance
             scored.append(item)
@@ -2366,6 +2454,11 @@ def search_web(
 
     if len(ranked) < max_results:
         ranked = _rank(normalized + _google_news_rss(query, wanted, timeout, lang))
+
+    # En modo noticias no se consulto SearXNG general; si todos los feeds
+    # fallaron, una pagina general es mejor que decir "no hay nada".
+    if news_mode and not ranked:
+        ranked = _rank(_searxng_search(query, lang, wanted, timeout, cfg))
 
     # Ultimo recurso para consultas de entidades: API de Wikipedia.
     if not ranked:

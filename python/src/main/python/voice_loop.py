@@ -2492,6 +2492,19 @@ def build_today_block() -> str:
     )
 
 
+def _news_turn_without_sources(user_text: str) -> bool:
+    """True si el turno pide actualidad y no hay contexto web que la respalde."""
+    text = str(user_text or "")
+    if web_tools.detect_intent(text) == "news":
+        return True
+    return bool(re.search(
+        r"\b(?:any\s+other\s+(?:subject|topic)|another\s+(?:subject|topic|story)|"
+        r"something\s+else|otro\s+tema|otra\s+noticia|otra\s+cosa)\b",
+        text,
+        re.IGNORECASE,
+    ))
+
+
 def get_system_prompt_with_context(
 
     user_text: str = "",
@@ -5948,6 +5961,24 @@ def process_turn(
 
         system_prompt += emma_tools.tool_result_hint(tool_used)
 
+        if "web_search" in (tool_used or []) and not web_sources:
+
+            system_prompt += (
+                "\n\nSIN RESULTADOS: la busqueda web no devolvio ninguna pagina "
+                "relevante. Dilo con honestidad; no inventes la noticia ni los datos."
+            )
+
+    elif _news_turn_without_sources(user_text):
+
+        # Sin fuente no se afirma actualidad: el 9B tiende a rellenar el
+        # hueco con una "noticia de hoy" inventada y luego no puede ampliarla.
+        system_prompt += (
+            "\n\nSIN FUENTES WEB: este turno no tiene ninguna fuente. "
+            "No presentes ningun tema como 'la noticia de hoy' ni inventes "
+            "actualidad, cifras ni citas. Si el usuario pide noticias, di que "
+            "no tienes datos verificados y ofrece buscarlos."
+        )
+
 
 
     messages = [{"role": "system", "content": system_prompt}]
@@ -7594,6 +7625,22 @@ def main():
                     if tool_messages:
 
                         system_prompt += emma_tools.tool_result_hint(tool_used)
+
+                        if "web_search" in (tool_used or []) and not web_sources:
+
+                            system_prompt += (
+                                "\n\nSIN RESULTADOS: la busqueda web no devolvio ninguna pagina "
+                                "relevante. Dilo con honestidad; no inventes la noticia ni los datos."
+                            )
+
+                    elif _news_turn_without_sources(user_text):
+
+                        system_prompt += (
+                            "\n\nSIN FUENTES WEB: este turno no tiene ninguna fuente. "
+                            "No presentes ningun tema como 'la noticia de hoy' ni inventes "
+                            "actualidad, cifras ni citas. Si el usuario pide noticias, di que "
+                            "no tienes datos verificados y ofrece buscarlos."
+                        )
 
                     
 
