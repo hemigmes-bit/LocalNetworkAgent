@@ -602,7 +602,7 @@ _SEARCH_VERBS = (
     "cuentame de", "dime sobre", "informacion sobre", "informacion de",
     "tell me about",
     # Verbos de atribución: "qué dice El País sobre...", "qué publican sobre..."
-    "dice", "dicen", "dijo", "dijeron", "says", "said", "publica", "publican",
+    "dice", "dicen", "dijo", "dijeron", "says", "said", "say", "publica", "publican",
     "publicado", "publicada", "habla", "hablan", "opina", "opinan", "piensa",
     "piensan", "significa", "significan", "ocurre", "ocurrio", "pasa", "paso",
     "sucede", "sucedio", "cuenta", "cuentan",
@@ -760,6 +760,10 @@ def detect_intent(text: str) -> Optional[str]:
     if any(re.search(p, norm) for p in _TUTOR_PATTERNS):
         return None
 
+    # Declaraciones de nombre ("call me Henry", "my name is..."): no buscan en la web.
+    if _is_name_declaration(norm):
+        return None
+
     if any(_has_phrase(norm, w) for w in _NEWS_WORDS):
         return "news"
     if any(_has_phrase(norm, w) for w in _WEATHER_WORDS):
@@ -769,6 +773,30 @@ def detect_intent(text: str) -> Optional[str]:
     if any(re.search(p, norm) for p in _FACTUAL_PATTERNS):
         return "search"
     return None
+
+
+def _is_name_declaration(text: str) -> bool:
+    """True si el texto declara o corrige un nombre propio."""
+    patterns = (
+        r"\bcall\s+me\s+[a-záéíóúüñ]{2,}\b",
+        r"\bmy\s+name\s+is\s+[a-záéíóúüñ]{2,}\b",
+        r"\bthe\s+name\s+is\s+[a-záéíóúüñ]{2,}\b",
+        r"\bi\s+am\s+[a-záéíóúüñ]{2,}\b",
+        r"\bi['’]m\s+[a-záéíóúüñ]{2,}\b",
+        r"\byou\s+can\s+call\s+me\s+[a-záéíóúüñ]{2,}\b",
+        r"\bthis\s+is\s+[a-záéíóúüñ]{2,}\b",
+        r"\bname['’]s\s+[a-záéíóúüñ]{2,}\b",
+        r"\bmi\s+nombre\s+es\s+[a-záéíóúüñ]{2,}\b",
+        r"\bme\s+llamo\s+[a-záéíóúüñ]{2,}\b",
+        r"\bmi\s+apodo\s+es\s+[a-záéíóúüñ]{2,}\b",
+        r"\bsoy\s+[a-záéíóúüñ]{2,}\b",
+        r"\bno\s+me\s+llamo\s+[a-záéíóúüñ]{2,}\b",
+        r"\bmy\s+name\s+is\s+not\s+[a-záéíóúüñ]{2,}\b",
+        r"\bi['’]m\s+not\s+[a-záéíóúüñ]{2,}\b",
+        r"\bno\s+soy\s+[a-záéíóúüñ]{2,}\b",
+        r"\byou\s+call\s+me\s+(?:wrong|bad)\b",
+    )
+    return any(re.search(p, text, re.IGNORECASE) for p in patterns)
 
 
 def should_search(text: str) -> bool:
