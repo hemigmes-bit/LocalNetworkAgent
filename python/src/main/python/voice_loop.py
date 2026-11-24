@@ -600,6 +600,25 @@ def get_current_user_name() -> str:
     return ""
 
 
+def update_user_name_memory(user_text: str) -> None:
+    """Detecta y persiste el nombre declarado o corregido por el usuario."""
+    if not user_text or not EMMA_STATE_AVAILABLE:
+        return
+    try:
+        status = emma_state.update_user_name_from_text(user_text)
+    except Exception as name_error:
+        print(f"[MEM] Error detectando nombre: {name_error}")
+        return
+
+    event = status.get("event")
+    if event == "cleared":
+        previous = status.get("previous", "")
+        print(f"[MEM] El usuario corrige: olvido el nombre '{previous}'")
+    elif event == "saved":
+        saved = status.get("name", "")
+        print(f"[MEM] Usuario se llama ahora: {saved}")
+
+
 def build_stt_hotwords() -> str:
     """Sesga el STT hacia el nombre del usuario y la palabra de activacion.
 
@@ -5597,29 +5616,7 @@ def process_turn(
 
     # --- Memoria del nombre: correcciones y declaraciones ---
 
-    if user_text:
-
-        try:
-
-            if emma_state.detect_name_correction(user_text) == "clear" and get_current_user_name():
-
-                print(f"[MEM] El usuario corrige: olvido el nombre '{get_current_user_name()}'")
-
-                emma_state.clear_user_name()
-
-                
-
-            detected_name = emma_state.detect_user_name(user_text)
-
-            if detected_name and detected_name != get_current_user_name():
-
-                _current_user_name = str(emma_state.set_user_name(detected_name) or "")
-
-                print(f"[MEM] Usuario se llama ahora: {_current_user_name}")
-
-        except Exception as name_error:
-
-            print(f"[MEM] Error detectando nombre: {name_error}")
+    update_user_name_memory(user_text)
 
 
 
@@ -6644,32 +6641,8 @@ def run_turn(turn_num: int, mic_stream, memoria):
 
 
         # Memorizar el nombre del usuario cuando este lo declara ("Me llamo X",
-
         # "My name is X", ...) para que la memoria persista entre turnos.
-
-        if user_text:
-
-            try:
-
-                if emma_state.detect_name_correction(user_text) == "clear" and get_current_user_name():
-
-                    print(f"[MEM] El usuario corrige: olvido el nombre '{get_current_user_name()}'")
-
-                    emma_state.clear_user_name()
-
-                    
-
-                detected_name = emma_state.detect_user_name(user_text)
-
-                if detected_name and detected_name != get_current_user_name():
-
-                    _current_user_name = str(emma_state.set_user_name(detected_name) or "")
-
-                    print(f"[MEM] Usuario se llama ahora: {_current_user_name}")
-
-            except Exception as name_error:
-
-                print(f"[MEM] Error detectando nombre: {name_error}")
+        update_user_name_memory(user_text)
 
 
 
@@ -7238,31 +7211,8 @@ def main():
 
                     
 
-                    # Memoria del nombre: primero correcciones, luego declaraciones.
-
-                    if user_text:
-
-                        try:
-
-                            if emma_state.detect_name_correction(user_text) == "clear" and get_current_user_name():
-
-                                print(f"[MEM] El usuario corrige: olvido el nombre '{get_current_user_name()}'")
-
-                                emma_state.clear_user_name()
-
-                                
-
-                            detected_name = emma_state.detect_user_name(user_text)
-
-                            if detected_name and detected_name != get_current_user_name():
-
-                                _current_user_name = str(emma_state.set_user_name(detected_name) or "")
-
-                                print(f"[MEM] Usuario se llama ahora: {_current_user_name}")
-
-                        except Exception as name_error:
-
-                            print(f"[MEM] Error detectando nombre: {name_error}")
+                    # Memoria del nombre: correcciones y declaraciones.
+                    update_user_name_memory(user_text)
 
 
 

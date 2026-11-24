@@ -301,10 +301,21 @@ _NAME_STOPWORDS = {
 
 # Expresiones que indican que el usuario esta corrigiendo el nombre guardado.
 _NAME_NEGATION_PREFIX = re.compile(
-    r"\b(?:why|who|what|how|when|where|not|never|don'?t|doesn'?t|isn'?t|"
-    r"aren'?t|wrong)\b[^.!?]{0,24}$",
+    r"\b(?:why|who|what|how|when|where|not|never|no|nunca|don'?t|doesn'?t|"
+    r"isn'?t|aren'?t|wrong)\b[^.!?]{0,24}$",
     re.IGNORECASE,
 )
+
+# La negacion solo afecta a su propia clausula: en "I'm not Henry, I'm Victor"
+# el "not" niega a Henry, no a Victor. Sin esto, una correccion con reemplazo
+# borraba el nombre anterior y no guardaba el nuevo.
+_NAME_CLAUSE_BREAK = re.compile(r"[,;:.!?]|\b(?:but|however)\b", re.IGNORECASE)
+
+
+def _negation_in_clause(prefix: str) -> bool:
+    """True si la ultima clausula del prefijo contiene una negacion."""
+    clause = _NAME_CLAUSE_BREAK.split(prefix)[-1]
+    return bool(_NAME_NEGATION_PREFIX.search(clause))
 
 
 def is_plausible_name(candidate: str) -> bool:
@@ -388,12 +399,40 @@ def detect_user_name(text: str) -> Optional[str]:
         for match in pattern.finditer(raw):
             # "why you call me not" / "don't call me Alex": no es una declaracion.
             prefix = raw[max(0, match.start() - 34):match.start()]
-            if _NAME_NEGATION_PREFIX.search(prefix):
+            if _negation_in_clause(prefix):
                 continue
             candidate = re.sub(r"\s+", " ", match.group(1)).strip(" .,!?¿¡'\"")
             if is_plausible_name(candidate):
                 return candidate
     return None
+
+
+def update_user_name_from_text(text: str) -> Dict[str, Any]:
+    """Aplica una declaracion o correccion de nombre al perfil.
+
+    Devuelve un estado para que la capa de voz pueda registrar el cambio:
+    ``{"event": "saved"|"cleared"|"", "name": str, "previous": str}``.
+
+    Si el usuario corrige y da un reemplazo ("I'm not Henry, I'm Victor"),
+    se guarda el reemplazo sin borrar el nombre anterior por el camino.
+    """
+    current = get_user_name() or ""
+    status: Dict[str, Any] = {"event": "", "name": current, "previous": ""}
+    if not text or not str(text).strip():
+        return status
+
+    detected = detect_user_name(text)
+    if detect_name_correction(text) == "clear" and current and not detected:
+        clear_user_name()
+        status.update(event="cleared", name="", previous=current)
+        return status
+
+    if detected and detected != current:
+        saved = str(set_user_name(detected) or "").strip()
+        if saved:
+            status.update(event="saved", name=saved)
+
+    return status
 
 
 # ---------------------------------------------------------------------------
