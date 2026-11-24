@@ -591,13 +591,23 @@ print(
 )
 
 def get_current_user_name() -> str:
-    """Obtiene el nombre actual del usuario desde la fuente unica (SQLite via emma_state)."""
+    """Nombre de quien habla ahora (o el usuario principal si no se sabe)."""
     try:
         if EMMA_STATE_AVAILABLE:
-            return str(emma_state.get_user_name() or "")
+            return str(emma_state.get_active_speaker() or "")
     except Exception:
         pass
     return ""
+
+
+def get_known_user_names() -> List[str]:
+    """Nombres de todas las personas reconocidas (principal incluido)."""
+    try:
+        if EMMA_STATE_AVAILABLE:
+            return list(emma_state.get_known_user_names() or [])
+    except Exception:
+        pass
+    return []
 
 
 def update_user_name_memory(user_text: str) -> None:
@@ -611,25 +621,38 @@ def update_user_name_memory(user_text: str) -> None:
         return
 
     event = status.get("event")
+    primary = status.get("primary", "")
     if event == "cleared":
         previous = status.get("previous", "")
-        print(f"[MEM] El usuario corrige: olvido el nombre '{previous}'")
+        if primary:
+            print(
+                f"[MEM] Se olvida el nombre '{previous}' de esta sesión; "
+                f"principal: '{primary}'"
+            )
+        else:
+            print(f"[MEM] El usuario corrige: olvido el nombre '{previous}'")
     elif event == "saved":
         saved = status.get("name", "")
-        print(f"[MEM] Usuario se llama ahora: {saved}")
+        if status.get("is_primary"):
+            print(f"[MEM] Usuario principal: {saved}")
+        else:
+            print(f"[MEM] Persona reconocida: {saved} (principal: {primary or '?'})")
 
 
 def build_stt_hotwords() -> str:
-    """Sesga el STT hacia el nombre del usuario y la palabra de activacion.
+    """Sesga el STT hacia las personas reconocidas y la palabra de activacion.
 
     Whisper transcribe mal los nombres propios poco frecuentes ("Henry" ->
     "Henrius"). Los hotwords se inyectan como texto previo y el decodificador
     los prefiere cuando el audio se parece.
     """
     terms = []
-    name = (get_current_user_name() or "").strip()
-    if name:
-        terms.append(name)
+    names = [(get_current_user_name() or "").strip()]
+    names.extend(get_known_user_names())
+    for name in names:
+        name = str(name or "").strip()
+        if name:
+            terms.append(name)
     terms.append("Emma")
     for term in STT_HOTWORDS:
         term = str(term or "").strip()
@@ -722,7 +745,12 @@ def correct_user_name_in_transcript(text: str) -> str:
 
 # Nombre inicial
 _current_user_name = get_current_user_name()
-print(f"[MEM] Nombre del usuario: {_current_user_name or '(no detectado)'}")
+_known_user_names = get_known_user_names()
+_known_label = ", ".join(_known_user_names)
+print(
+    f"[MEM] Nombre del usuario: {_current_user_name or '(no detectado)'}"
+    + (f" | reconocidos: {_known_label}" if _known_label else "")
+)
 
 
 
@@ -2573,9 +2601,9 @@ def get_system_prompt_with_context(
 
         " Nunca inventes el nombre ni datos personales del usuario: si no los "
 
-        "sabes, pregúntalos. Si te corrigen el nombre, discúlpate, olvida el "
+        "sabes, pregúntalos. Si te corrigen el nombre, discúlpate y usa el "
 
-        "anterior y usa el correcto a partir de ese momento."
+        "correcto para esa persona; no borres a las demás personas reconocidas."
 
     )
 
@@ -2591,27 +2619,19 @@ def get_system_prompt_with_context(
 
 
 
-    # Memoria del nombre del usuario: se inyecta en cada prompt para que Emma
+    # Memoria de personas: usuario principal, hablante actual y reconocidos.
 
-    # se dirija a la persona correcta con el nombre que ella misma declaró.
+    name_block = emma_state.build_name_memory_block() if EMMA_STATE_AVAILABLE else ""
 
-    if get_current_user_name():
+    if name_block:
 
-        context += (
-
-            f"\n\nMEMORIA DEL USUARIO: el usuario se llama \"{get_current_user_name()}\". "
-            f"Llámalo siempre \"{get_current_user_name()}\" y nunca le pongas otro nombre. "
-            "No añadas apellidos ni nombres completos que no te haya dicho. "
-
-            "Si dice que no es su nombre, discúlpate y pregúntale cómo se llama."
-
-        )
+        context += "\n\n" + name_block
 
     else:
 
         context += (
 
-            "\n\nMEMORIA DEL USUARIO: no sabes cómo se llama el usuario. "
+            "\n\nMEMORIA DE PERSONAS: no sabes cómo se llama el usuario. "
 
             "Pregúntaselo una vez, con naturalidad. No inventes ningún nombre "
 

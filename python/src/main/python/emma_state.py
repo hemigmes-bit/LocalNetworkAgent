@@ -221,7 +221,7 @@ def _sqlite_user_name() -> Optional[str]:
 
 
 def get_user_name() -> Optional[str]:
-    """Devuelve el nombre con el que Emma se dirige al usuario (o None).
+    """Devuelve el nombre principal del perfil (o None).
 
     SQLite es la unica fuente de verdad.
     """
@@ -231,10 +231,64 @@ def get_user_name() -> Optional[str]:
     return None
 
 
+# Hablante de la sesion actual. No se persiste: al arrancar se usa el principal.
+_ACTIVE_SPEAKER: Optional[str] = None
+
+
+def get_known_user_names() -> List[str]:
+    """Personas reconocidas, incluido el usuario principal."""
+    try:
+        import emma_memory
+        return list(emma_memory.get_known_names() or [])
+    except Exception as exc:
+        print(f"[WARN] No se pudieron leer las personas reconocidas: {exc}")
+        return []
+
+
+def add_known_user_name(name: str) -> List[str]:
+    """Registra una persona reconocida sin borrar a las anteriores."""
+    try:
+        import emma_memory
+        return list(emma_memory.add_known_name(name) or [])
+    except Exception as exc:
+        print(f"[WARN] No se pudo guardar la persona reconocida: {exc}")
+        return get_known_user_names()
+
+
+def remove_known_user_name(name: str) -> List[str]:
+    """Olvida una persona reconocida concreta."""
+    try:
+        import emma_memory
+        return list(emma_memory.remove_known_name(name) or [])
+    except Exception as exc:
+        print(f"[WARN] No se pudo borrar la persona reconocida: {exc}")
+        return get_known_user_names()
+
+
+def set_active_speaker(name: Optional[str]) -> Optional[str]:
+    """Fija quien habla en esta sesion sin cambiar el usuario principal."""
+    global _ACTIVE_SPEAKER
+    cleaned = re.sub(r"\s+", " ", str(name or "")).strip().strip(" .,!?¿¡'\"")
+    if not cleaned or not is_plausible_name(cleaned):
+        _ACTIVE_SPEAKER = None
+        return None
+    _ACTIVE_SPEAKER = cleaned
+    return cleaned
+
+
+def get_active_speaker() -> Optional[str]:
+    """Nombre de quien habla ahora; si no se sabe, el usuario principal."""
+    if _ACTIVE_SPEAKER:
+        known = {item.lower() for item in get_known_user_names()}
+        if _ACTIVE_SPEAKER.lower() in known:
+            return _ACTIVE_SPEAKER
+    return get_user_name()
+
+
 def set_user_name(name: str) -> Optional[str]:
     """Guarda el nombre declarado por el usuario ("Me llamo Airman").
 
-    Persiste en SQLite (fuente unica).
+    Persiste en SQLite (fuente unica) y lo convierte en el hablante actual.
     """
     cleaned = re.sub(r"\s+", " ", str(name or "")).strip().strip(" .,!?¿¡'\"")
     if not is_plausible_name(cleaned):
@@ -247,14 +301,18 @@ def set_user_name(name: str) -> Optional[str]:
     except Exception as exc:
         print(f"[WARN] No se pudo guardar el nombre en SQLite: {exc}")
 
+    if saved:
+        set_active_speaker(saved)
     return saved if saved else None
 
 
 def clear_user_name() -> None:
-    """Olvida el nombre guardado (p. ej. tras una correccion del usuario)."""
+    """Olvida el nombre principal guardado y el hablante de la sesion."""
+    global _ACTIVE_SPEAKER
     try:
         import emma_memory
         emma_memory.clear_user_name()
+        _ACTIVE_SPEAKER = None
     except Exception as exc:
         print(f"[WARN] No se pudo borrar el nombre de SQLite: {exc}")
 
@@ -340,9 +398,9 @@ def is_plausible_name(candidate: str) -> bool:
 
 
 def detect_name_correction(text: str) -> Optional[str]:
-    """Detecta que el usuario corrige el nombre que Emma tenia guardado.
+    """Detecta que el usuario corrige el nombre que Emma usa para el.
 
-    Devuelve ``"clear"`` cuando hay que olvidar el nombre actual.
+    Devuelve ``"clear"`` cuando hay que olvidar el nombre del hablante actual.
     """
     if not text or not str(text).strip():
         return None
@@ -362,7 +420,7 @@ def detect_name_correction(text: str) -> Optional[str]:
     )
     if match:
         other = match.group(1).strip().split()[0].strip(".,!?¿¡")
-        stored = get_user_name()
+        stored = get_active_speaker()
         if stored and other and other.lower() == stored.lower():
             return "clear"
     return None
@@ -378,11 +436,14 @@ _USER_NAME_PATTERNS: List[tuple] = [
     # Inglés
     (re.compile(r"\bmy name is\s+([a-záéíóúüñ']{2,})", re.IGNORECASE), False),
     (re.compile(r"\bthe name is\s+([a-záéíóúüñ']{2,})", re.IGNORECASE), False),
+    (re.compile(r"\bi go by\s+([a-záéíóúüñ']{2,})", re.IGNORECASE), False),
     (re.compile(r"\bi am\s+([a-záéíóúüñ']{2,})", re.IGNORECASE), False),
     (re.compile(r"\bi['’]m\s+([a-záéíóúüñ']{2,})", re.IGNORECASE), False),
     (re.compile(r"\bcall me\s+([a-záéíóúüñ']{2,})", re.IGNORECASE), False),
     (re.compile(r"\byou can call me\s+([a-záéíóúüñ']{2,})", re.IGNORECASE), False),
     (re.compile(r"\bthis is\s+([a-záéíóúüñ']{2,})", re.IGNORECASE), False),
+    (re.compile(r"\bit['’]s\s+([a-záéíóúüñ']{2,})\s+speaking\b", re.IGNORECASE), False),
+    (re.compile(r"\b([a-záéíóúüñ']{2,})['’]s\s+my\s+name\b", re.IGNORECASE), False),
     (re.compile(r"\bname['’]s\s+([a-záéíóúüñ']{2,})", re.IGNORECASE), False),
 ]
 
@@ -395,6 +456,9 @@ def detect_user_name(text: str) -> Optional[str]:
     if not text or not text.strip():
         return None
     raw = str(text)
+    # Si el STT escribe un nombre ya conocido en minusculas ("victor"),
+    # recuperamos la grafia guardada antes de descartarlo.
+    known_lookup = {name.lower(): name for name in get_known_user_names()}
     for pattern, _unused in _USER_NAME_PATTERNS:
         for match in pattern.finditer(raw):
             # "why you call me not" / "don't call me Alex": no es una declaracion.
@@ -402,6 +466,7 @@ def detect_user_name(text: str) -> Optional[str]:
             if _negation_in_clause(prefix):
                 continue
             candidate = re.sub(r"\s+", " ", match.group(1)).strip(" .,!?¿¡'\"")
+            candidate = known_lookup.get(candidate.lower(), candidate)
             if is_plausible_name(candidate):
                 return candidate
     return None
@@ -410,29 +475,103 @@ def detect_user_name(text: str) -> Optional[str]:
 def update_user_name_from_text(text: str) -> Dict[str, Any]:
     """Aplica una declaracion o correccion de nombre al perfil.
 
-    Devuelve un estado para que la capa de voz pueda registrar el cambio:
-    ``{"event": "saved"|"cleared"|"", "name": str, "previous": str}``.
+    Mantiene un usuario principal y una lista de personas reconocidas. Si
+    alguien dice "I'm Victor" o "I'm not Henry, I'm Victor", Victor pasa a ser
+    el hablante actual sin borrar a Henry.
 
-    Si el usuario corrige y da un reemplazo ("I'm not Henry, I'm Victor"),
-    se guarda el reemplazo sin borrar el nombre anterior por el camino.
+    Devuelve un estado para que la capa de voz pueda registrar el cambio:
+    ``{"event": "saved"|"cleared"|"", "name", "previous", "primary",
+    "is_primary", "known"}``.
     """
-    current = get_user_name() or ""
-    status: Dict[str, Any] = {"event": "", "name": current, "previous": ""}
+    primary = get_user_name() or ""
+    active = get_active_speaker() or ""
+    status: Dict[str, Any] = {
+        "event": "",
+        "name": active or primary,
+        "previous": "",
+        "primary": primary,
+        "is_primary": False,
+        "known": get_known_user_names(),
+    }
     if not text or not str(text).strip():
         return status
 
     detected = detect_user_name(text)
-    if detect_name_correction(text) == "clear" and current and not detected:
-        clear_user_name()
-        status.update(event="cleared", name="", previous=current)
+    correction = detect_name_correction(text)
+
+    if correction == "clear" and not detected:
+        if active:
+            status.update(event="cleared", name="", previous=active)
+            if primary and active.lower() == primary.lower():
+                clear_user_name()
+            else:
+                remove_known_user_name(active)
+                set_active_speaker(None)
+            status["primary"] = get_user_name() or ""
+            status["known"] = get_known_user_names()
         return status
 
-    if detected and detected != current:
-        saved = str(set_user_name(detected) or "").strip()
-        if saved:
-            status.update(event="saved", name=saved)
+    if detected:
+        add_known_user_name(detected)
+        changed = detected.lower() != active.lower()
+        if not primary:
+            saved = str(set_user_name(detected) or "").strip()
+            if saved:
+                status.update(
+                    event="saved",
+                    name=saved,
+                    primary=saved,
+                    is_primary=True,
+                    known=get_known_user_names(),
+                )
+        else:
+            set_active_speaker(detected)
+            if changed:
+                status.update(
+                    event="saved",
+                    name=detected,
+                    is_primary=detected.lower() == primary.lower(),
+                    known=get_known_user_names(),
+                )
+            else:
+                status["known"] = get_known_user_names()
 
     return status
+
+
+def build_name_memory_block() -> str:
+    """Bloque de prompt con usuario principal, hablante y reconocidos."""
+    primary = get_user_name() or ""
+    active = get_active_speaker() or ""
+    known = get_known_user_names()
+    if not primary and not active and not known:
+        return ""
+
+    names = ", ".join(known) if known else (active or primary)
+    if active and primary and active.lower() != primary.lower():
+        return (
+            f'MEMORIA DE PERSONAS: el usuario principal es "{primary}". '
+            f'Personas reconocidas: {names}. En este turno habla "{active}": '
+            f'llámalo "{active}", no "{primary}". No mezcles los nombres.'
+        )
+
+    if primary:
+        extra = (
+            " Si alguien se identifica como otra persona reconocida, usa su "
+            "nombre sin olvidar al usuario principal."
+            if len(known) > 1
+            else ""
+        )
+        return (
+            f'MEMORIA DE PERSONAS: el usuario principal es "{primary}". '
+            f'Personas reconocidas: {names}. En este turno habla '
+            f'"{active or primary}".{extra}'
+        )
+
+    return (
+        f"MEMORIA DE PERSONAS: personas reconocidas: {names}. "
+        "No sabes quién habla en este turno; pregúntale su nombre si hace falta."
+    )
 
 
 # ---------------------------------------------------------------------------

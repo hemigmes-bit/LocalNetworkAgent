@@ -53,6 +53,7 @@ LEVELS = ("A1", "A2", "B1", "B2", "C1", "C2")
 
 PROFILE_DEFAULTS: Dict[str, str] = {
     "user_name": "",
+    "known_names": "",
     "level": "",
     "goals": "",
     "interests": "",
@@ -333,16 +334,70 @@ class MemoryStore:
         return str(self.get_profile().get("user_name") or "").strip()
 
     def set_user_name(self, name: Any) -> str:
-        """Guarda el nombre del usuario en el perfil SQLite."""
+        """Guarda el nombre principal y lo registra como persona reconocida."""
         cleaned = _clean(name, 60).strip(" .,!?\"'")
         if not cleaned or not _is_latin(cleaned):
             return self.get_user_name()
         self.set_profile_value("user_name", cleaned)
+        self.add_known_name(cleaned)
         return cleaned
 
     def clear_user_name(self) -> None:
-        """Olvida el nombre guardado (correccion explicita del usuario)."""
+        """Olvida el nombre principal y lo quita de personas reconocidas."""
+        current = self.get_user_name()
         self.set_profile_value("user_name", "")
+        if current:
+            self.remove_known_name(current)
+
+    def get_known_names(self) -> List[str]:
+        """Personas reconocidas (siempre incluye al usuario principal)."""
+        raw = str(self.get_profile().get("known_names") or "").strip()
+        items: List[Any] = []
+        if raw:
+            try:
+                parsed = json.loads(raw)
+                items = parsed if isinstance(parsed, list) else [raw]
+            except (TypeError, ValueError):
+                items = [part.strip() for part in raw.split(",")]
+
+        names: List[str] = []
+        seen = set()
+        primary = self.get_user_name()
+        for item in ([primary] if primary else []) + list(items):
+            cleaned = _clean(item, 60).strip(" .,!?\"'")
+            if not cleaned or not _is_latin(cleaned):
+                continue
+            key = cleaned.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            names.append(cleaned)
+        return names
+
+    def add_known_name(self, name: Any) -> List[str]:
+        """Anade una persona reconocida sin borrar a las anteriores."""
+        cleaned = _clean(name, 60).strip(" .,!?\"'")
+        if cleaned and _is_latin(cleaned):
+            names = self.get_known_names()
+            if cleaned.lower() not in {item.lower() for item in names}:
+                names.append(cleaned)
+                self.set_profile_value(
+                    "known_names", json.dumps(names, ensure_ascii=False)
+                )
+        return self.get_known_names()
+
+    def remove_known_name(self, name: Any) -> List[str]:
+        """Olvida una persona reconocida concreta."""
+        cleaned = _clean(name, 60).strip(" .,!?\"'")
+        if cleaned:
+            names = [
+                item for item in self.get_known_names()
+                if item.lower() != cleaned.lower()
+            ]
+            self.set_profile_value(
+                "known_names", json.dumps(names, ensure_ascii=False)
+            )
+        return self.get_known_names()
 
     def merge_interests(self, items: Iterable[str], limit: int = 8) -> List[str]:
         existing = [
@@ -1108,6 +1163,21 @@ def clear_user_name() -> None:
     get_store().clear_user_name()
 
 
+def get_known_names() -> List[str]:
+    """Personas reconocidas, incluido el usuario principal."""
+    return get_store().get_known_names()
+
+
+def add_known_name(name: Any) -> List[str]:
+    """Anade una persona reconocida sin borrar a las anteriores."""
+    return get_store().add_known_name(name)
+
+
+def remove_known_name(name: Any) -> List[str]:
+    """Olvida una persona reconocida concreta."""
+    return get_store().remove_known_name(name)
+
+
 def log_turn(
     session_id: int,
     user_text: str,
@@ -1580,10 +1650,16 @@ def _selftest() -> None:
 
     # El nombre vive en el perfil SQLite (fuente unica).
     assert store.get_user_name() == ""
+    assert store.get_known_names() == []
     assert store.set_user_name("Henry") == "Henry"
     assert store.get_user_name() == "Henry"
+    assert store.get_known_names() == ["Henry"]
+    assert store.add_known_name("Victor") == ["Henry", "Victor"]
     store.clear_user_name()
     assert store.get_user_name() == ""
+    assert store.get_known_names() == ["Victor"]
+    store.remove_known_name("Victor")
+    assert store.get_known_names() == []
 
     assert store.save_error("I go to beach", "I went to the beach", "past tense")
     assert store.save_error("I go to beach", "I went to the beach", "past tense")
